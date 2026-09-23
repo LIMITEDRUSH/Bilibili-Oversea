@@ -18,7 +18,10 @@ jobs:
           node-version: 20
       - run: npm test
       - run: npm run check
+      - run: npm run package:browser
+      - run: test -s browser-extension/dist/bilibili-oversea-browser-v2.0.0.zip
       - run: npm run build -- --base-url=https://raw.githubusercontent.com/LIMITEDRUSH/Bilibili-Oversea/main --out=.ci-dist
       - run: test -f .ci-dist/index.html
       - run: test -f .ci-dist/guide.html
+      - run: test -f .ci-dist/browser-guide.html
       - run: test -s .ci-dist/BiliCDNAuto-ConnectVPN.shortcut

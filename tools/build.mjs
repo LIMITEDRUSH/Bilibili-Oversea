@@ -11,6 +11,9 @@ const args = Object.fromEntries(
 );
 const baseUrl = String(args["base-url"] || "").replace(/\/+$/, "");
 const outDir = path.resolve(root, args.out || "dist");
+const browserManifest = JSON.parse(
+  await fs.readFile(path.join(root, "browser-extension", "manifest.json"), "utf8"),
+);
 
 if (!/^https:\/\/[^\s]+$/i.test(baseUrl)) {
   throw new Error("请使用 --base-url=https://... 指定项目根目录的公开 HTTPS 地址");
@@ -42,13 +45,14 @@ const links = {
   loon: `https://www.nsloon.com/openloon/import?plugin=${encodeURIComponent(configUrls[templates[2]])}`,
   stash: `stash://install-override?url=${encodeURIComponent(configUrls[templates[3]])}`,
   quantumultx: configUrls[templates[4]],
-  browser: `${baseUrl}/browser-extension/dist/bili-cdn-auto-browser-v1.8.5.zip`,
+  browser: `${baseUrl}/browser-extension/dist/bilibili-oversea-browser-v${browserManifest.version}.zip`,
   shortcut: `./${shortcutNames[0]}`,
 };
 
 const pages = [
   ["install.template.html", "index.html"],
   ["guide.template.html", "guide.html"],
+  ["browser-guide.template.html", "browser-guide.html"],
 ];
 for (const [templateName, outputName] of pages) {
   let html = await fs.readFile(path.join(root, "site", templateName), "utf8");

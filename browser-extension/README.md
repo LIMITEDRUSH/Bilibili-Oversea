@@ -1,28 +1,34 @@
-# Bili CDN Auto 浏览器扩展
+# Bilibili-oversea 浏览器扩展 2.0
 
-适用于 Chrome 111+、Edge 111+ 及其他兼容 Manifest V3 的 Chromium 浏览器。
+适用于 Chrome 111+、Edge 111+ 及兼容 Manifest V3 的 Chromium 浏览器。
+
+这是 Bilibili-oversea 的独立实现，不包含或运行其他浏览器扩展的源码。页面观察、候选校验、Range 测速、
+标签页级会话规则、缓冲健康检查和弹窗界面均位于本目录，并由本项目维护。
 
 ## 安装
 
-1. 解压发布 ZIP。
-2. 打开 `chrome://extensions`；Edge 使用 `edge://extensions`。
-3. 开启“开发者模式”。
-4. 点击“加载已解压的扩展程序”，选择包含 `manifest.json` 的目录。
-5. 打开或刷新 B 站视频页面。扩展首次安装即启用自动模式。
+完整步骤见：<https://limitedrush.github.io/Bilibili-Oversea/browser-guide.html>
 
-## 功能
+1. 下载并解压 `bilibili-oversea-browser-v2.0.0.zip`。
+2. Chrome 打开 `chrome://extensions`；Edge 打开 `edge://extensions`。
+3. 开启“开发者模式”，点击“加载已解压的扩展程序”。
+4. 选择解压后包含 `manifest.json` 的目录。
+5. 打开或刷新 B 站视频页面，播放几秒，再点击扩展图标查看测速结果。
 
-- 从当前视频的真实媒体地址发现兼容 CDN；
-- 两阶段本地测速，兼顾首包和持续吞吐量；
-- 为每个播放标签页建立临时重定向规则；
-- 缓冲持续下降或播放卡住时尝试其他已验证节点；
-- 支持手动节点、自定义候选、禁用候选和一键恢复原始 CDN；
-- 不申请代理、Cookie、历史记录或全站访问权限；不包含遥测和远程代码。
+## 工作方式
 
-完整媒体 URL 只保存在内存中；持久化数据仅包含设置、主机名和有上限的测速摘要。
+- 只读观察 B 站 `playurl` 响应，页面桥接脚本不修改播放器数据；
+- 从当前视频带签名的真实媒体 URL 派生候选请求；
+- 每个候选最多读取 128 KB Range 数据，在本机比较吞吐量和首包；
+- 仅为当前 B 站播放标签页添加 Chrome 会话重定向规则；
+- 播放器持续低缓冲或触发 `waiting/stalled` 时切换到下一个已验证节点；
+- 支持自动优选、立即重测、固定节点、禁用节点和恢复原始 CDN。
 
-## 来源
+## 权限
 
-本扩展基于 MIT 项目
-[liiliiliil/bili-cdn-switcher](https://github.com/liiliiliil/bili-cdn-switcher) 1.8.4。
-具体变更和归属见 `UPSTREAM.md`，许可证见 `LICENSE`。
+- `activeTab`：打开弹窗时读取当前标签页；
+- `storage`：保存模式、禁用节点和重测间隔；
+- `declarativeNetRequestWithHostAccess`：建立仅限当前播放标签页的临时 CDN 规则；
+- 主机范围仅为明确的 B 站页面、`*.bilivideo.com` 和 B 站的 `*.mcdn.bilivideo.cn` 媒体域名。
+
+不申请代理、Cookie、历史记录、`webRequest` 或 `<all_urls>` 权限，不包含遥测、广告、远程代码或后端服务。

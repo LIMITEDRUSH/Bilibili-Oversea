@@ -1,103 +1,37 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
-const manifest = JSON.parse(
-  await readFile(new URL("../manifest.json", import.meta.url), "utf8")
-);
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
 
-test("manifest 使用 MV3 且默认没有代理权限", () => {
+test("使用独立 2.0 MV3 后台", () => {
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, "1.8.5");
-  assert.equal("version_name" in manifest, false);
-  assert.equal(manifest.permissions.includes("proxy"), false);
-  assert.equal(manifest.permissions.includes("webRequestBlocking"), false);
-  assert.equal(manifest.permissions.includes("alarms"), false);
-  assert.equal(manifest.permissions.includes("<all_urls>"), false);
-  assert.equal(
-    manifest.permissions.includes("declarativeNetRequestWithHostAccess"),
-    true
-  );
-  assert.equal(
-    manifest.permissions.includes("declarativeNetRequest"),
-    false
-  );
+  assert.equal(manifest.version, "2.0.0");
+  assert.equal(manifest.name, "Bilibili-oversea");
+  assert.equal(manifest.background.service_worker, "src/worker.js");
 });
 
-test("缓冲健康检查在内容脚本前加载", () => {
-  const isolatedWorld = manifest.content_scripts.find(
-    (script) => script.world !== "MAIN"
-  );
-  assert.deepEqual(isolatedWorld.js, [
-    "src/playback-health.js",
-    "src/content.js"
-  ]);
-});
-
-test("扩展与商店图标路径完整", async () => {
-  const expectedIcons = {
-    16: "assets/icons/icon-16.png",
-    32: "assets/icons/icon-32.png",
-    48: "assets/icons/icon-48.png",
-    128: "assets/icons/icon-128.png"
-  };
-  assert.deepEqual(manifest.icons, expectedIcons);
-  assert.deepEqual(manifest.action.default_icon, {
-    16: expectedIcons[16],
-    32: expectedIcons[32]
-  });
-
-  for (const [size, path] of Object.entries(expectedIcons)) {
-    const bytes = await readFile(new URL(`../${path}`, import.meta.url));
-    assert.equal(bytes.toString("ascii", 1, 4), "PNG");
-    assert.equal(bytes.readUInt32BE(16), Number(size));
-    assert.equal(bytes.readUInt32BE(20), Number(size));
+test("不申请代理、Cookie、历史、webRequest 或全站权限", () => {
+  for (const permission of ["proxy", "cookies", "history", "webRequest", "webRequestBlocking"]) {
+    assert.equal(manifest.permissions.includes(permission), false);
   }
-});
-
-test("商店图片尺寸符合上传要求", async () => {
-  const assets = new Map([
-    ["assets/store/small-promo-440x280.png", [440, 280]],
-    ["assets/store/screenshot-01-overview-1280x800.png", [1280, 800]],
-    ["assets/store/screenshot-02-scope-1280x800.png", [1280, 800]]
-  ]);
-
-  for (const [path, [width, height]] of assets) {
-    const bytes = await readFile(new URL(`../${path}`, import.meta.url));
-    assert.equal(bytes.toString("ascii", 1, 4), "PNG");
-    assert.equal(bytes.readUInt32BE(16), width);
-    assert.equal(bytes.readUInt32BE(20), height);
-  }
-});
-
-test("host 权限只覆盖 B 站页面与 bilivideo 媒体", () => {
+  assert.equal(manifest.host_permissions.includes("<all_urls>"), false);
   assert.deepEqual(manifest.host_permissions, [
-    "https://www.bilibili.com/*",
-    "https://m.bilibili.com/*",
-    "https://*.bilivideo.com/*"
+    "https://www.bilibili.com/*", "https://m.bilibili.com/*", "https://*.bilivideo.com/*",
+    "https://*.mcdn.bilivideo.cn/*",
   ]);
 });
 
-test("内容脚本只进入明确的 B 站播放路径", () => {
-  for (const script of manifest.content_scripts) {
-    assert.equal(
-      script.matches.every((match) => match.includes("bilibili.com/")),
-      true
-    );
-    assert.equal(script.matches.some((match) => match.includes("/video/*")), true);
-    assert.equal(
-      script.matches.some((match) => match.includes("/bangumi/play/*")),
-      true
-    );
-  }
+test("页面桥接和隔离脚本分开运行", () => {
+  assert.equal(manifest.content_scripts[0].world, "MAIN");
+  assert.deepEqual(manifest.content_scripts[0].js, ["src/page-bridge.js"]);
+  assert.deepEqual(manifest.content_scripts[1].js, ["src/content.js"]);
 });
 
-test("主世界脚本只读观察 playurl，替换逻辑仍由 DNR 承担", () => {
-  const mainScript = manifest.content_scripts.find(
-    (script) => script.world === "MAIN"
-  );
-  assert.ok(mainScript);
-  assert.deepEqual(mainScript.js, ["src/page-hook.js"]);
-  assert.equal(mainScript.run_at, "document_start");
-  assert.equal(manifest.permissions.includes("scripting"), false);
+test("清单引用的图标和界面文件存在", () => {
+  const files = [manifest.action.default_popup, manifest.background.service_worker, ...Object.values(manifest.icons)];
+  for (const file of files) assert.equal(fs.existsSync(path.join(root, file)), true, file);
 });

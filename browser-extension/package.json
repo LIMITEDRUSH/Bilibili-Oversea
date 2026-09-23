@@ -1,7 +1,7 @@
 {
-  "name": "bili-cdn-auto-browser",
-  "version": "1.8.5",
-  "description": "Privacy-first Chromium MV3 extension that locally benchmarks and switches Bilibili video CDN hosts.",
+  "name": "bilibili-oversea-browser",
+  "version": "2.0.0",
+  "description": "Independent privacy-first Chromium MV3 extension for local Bilibili CDN benchmarking and switching.",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -16,7 +16,7 @@
   ],
   "scripts": {
     "test": "node --test",
-    "check": "node --check src/core.js && node --check src/candidates.js && node --check src/page-hook.js && node --check src/playback-health.js && node --check src/content.js && node --check src/service-worker.js && node --check src/popup.js && node --check scripts/package-extension.mjs && node --test",
+    "check": "node --check src/engine.js && node --check src/page-bridge.js && node --check src/content.js && node --check src/worker.js && node --check src/popup.js && node --check scripts/package-extension.mjs && node --test",
     "package": "node scripts/package-extension.mjs"
   }
 }

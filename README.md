@@ -4,6 +4,8 @@
 
 **iOS 完整教程：<https://limitedrush.github.io/Bilibili-Oversea/guide.html>**
 
+**浏览器插件教程：<https://limitedrush.github.io/Bilibili-Oversea/browser-guide.html>**
+
 浏览器版可直接从安装入口下载；iPhone/iPad 在同一页面选择 Surge、Loon、Shadowrocket 或 Stash
 一键导入，并可安装“连接 VPN”快捷指令。
 
@@ -17,9 +19,10 @@
 
 ### Chrome / Edge
 
-使用 `browser-extension/dist/bili-cdn-auto-browser-v1.8.5.zip`。解压后打开
+浏览器插件名称为 **Bilibili-oversea**。使用 `browser-extension/dist/bilibili-oversea-browser-v2.0.0.zip`，解压后打开
 `chrome://extensions` 或 `edge://extensions`，开启开发者模式并选择“加载已解压的扩展程序”。
-自动模式首次安装即启用，打开 B 站视频播放几秒即可。
+自动模式首次安装即启用，打开 B 站视频播放几秒即可。完整步骤见
+[`docs/BROWSER_TUTORIAL.md`](docs/BROWSER_TUTORIAL.md)。
 
 ### iPhone / iPad
 
@@ -110,7 +113,5 @@ npm run build -- --base-url=https://raw.githubusercontent.com/USER/REPO/main
 
 ## 开源来源
 
-浏览器端基于 MIT 项目
-[`liiliiliil/bili-cdn-switcher`](https://github.com/liiliiliil/bili-cdn-switcher) 1.8.4；iOS 域名族和匹配范围参考了
-Apache-2.0 项目 [`Biliverse/Redirect`](https://github.com/Biliverse/Redirect)。详细归属见
-`THIRD_PARTY_NOTICES.md` 及各子目录许可证。
+浏览器扩展 2.0 为本项目独立实现，不包含其他浏览器扩展的源码。iOS 域名族和匹配范围参考了 Apache-2.0
+项目 [`Biliverse/Redirect`](https://github.com/Biliverse/Redirect)。详细归属见 `THIRD_PARTY_NOTICES.md`。
