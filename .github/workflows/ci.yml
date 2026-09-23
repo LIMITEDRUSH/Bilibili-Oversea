@@ -19,7 +19,8 @@ jobs:
       - run: npm test
       - run: npm run check
       - run: npm run package:browser
-      - run: test -s browser-extension/dist/bilibili-oversea-browser-v2.0.0.zip
+      - name: Verify versioned browser package
+        run: node -e "const fs=require('fs');const v=require('./browser-extension/manifest.json').version;const p='browser-extension/dist/bilibili-oversea-browser-v'+v+'.zip';if(!fs.statSync(p).size)process.exit(1)"
       - run: npm run build -- --base-url=https://raw.githubusercontent.com/LIMITEDRUSH/Bilibili-Oversea/main --out=.ci-dist
       - run: test -f .ci-dist/index.html
       - run: test -f .ci-dist/guide.html
