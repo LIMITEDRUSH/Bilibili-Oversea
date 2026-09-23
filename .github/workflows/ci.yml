@@ -20,4 +20,5 @@ jobs:
       - run: npm run check
       - run: npm run build -- --base-url=https://raw.githubusercontent.com/LIMITEDRUSH/Bilibili-Oversea/main --out=.ci-dist
       - run: test -f .ci-dist/index.html
+      - run: test -f .ci-dist/guide.html
       - run: test -s .ci-dist/BiliCDNAuto-ConnectVPN.shortcut

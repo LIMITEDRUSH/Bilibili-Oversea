@@ -2,6 +2,8 @@
 
 **安装入口：<https://limitedrush.github.io/Bilibili-Oversea/>**
 
+**iOS 完整教程：<https://limitedrush.github.io/Bilibili-Oversea/guide.html>**
+
 浏览器版可直接从安装入口下载；iPhone/iPad 在同一页面选择 Surge、Loon、Shadowrocket 或 Stash
 一键导入，并可安装“连接 VPN”快捷指令。
 
@@ -60,8 +62,9 @@ iOS 原生“连接 VPN”动作，不保存 API 密钥，也不会打开第三�
 以后直接点击原版哔哩哔哩 App 即可。自动化会在当前 App 内连接已配置的 VPN，首个视频请求出现时自动测速。
 如果设备有多个 VPN，请编辑快捷指令里的“连接 VPN”动作，选择正在使用的网络工具。
 
-iOS 出于安全原因不允许下载内容替用户静默创建“个人自动化”，所以上述自动化必须在设备上确认一次。详细步骤和
-URL Scheme 备用方案见 [`ios/SHORTCUTS.md`](ios/SHORTCUTS.md)。
+iOS 出于安全原因不允许下载内容替用户静默创建“个人自动化”，所以上述自动化必须在设备上确认一次。从下载、导入、
+证书、验证到自动化和排错的全过程见 [`docs/IOS_TUTORIAL.md`](docs/IOS_TUTORIAL.md)，快捷指令技术说明见
+[`ios/SHORTCUTS.md`](ios/SHORTCUTS.md)。
 
 统一的本机控制地址：
 

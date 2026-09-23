@@ -46,11 +46,17 @@ const links = {
   shortcut: `./${shortcutNames[0]}`,
 };
 
-let html = await fs.readFile(path.join(root, "site", "install.template.html"), "utf8");
-for (const [key, value] of Object.entries(links)) {
-  html = html.replaceAll(`__${key.toUpperCase()}__`, value);
+const pages = [
+  ["install.template.html", "index.html"],
+  ["guide.template.html", "guide.html"],
+];
+for (const [templateName, outputName] of pages) {
+  let html = await fs.readFile(path.join(root, "site", templateName), "utf8");
+  for (const [key, value] of Object.entries(links)) {
+    html = html.replaceAll(`__${key.toUpperCase()}__`, value);
+  }
+  await fs.writeFile(path.join(outDir, outputName), html);
 }
-await fs.writeFile(path.join(outDir, "index.html"), html);
 await fs.writeFile(
   path.join(outDir, "install-links.json"),
   `${JSON.stringify({ baseUrl, generatedAt: new Date().toISOString(), links }, null, 2)}\n`,

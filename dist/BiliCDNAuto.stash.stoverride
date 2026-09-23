@@ -1,7 +1,7 @@
 name: "Bili CDN Auto"
 desc: "B站视频 CDN 自动实测、缓存与故障切换；支持快捷指令本机控制。"
 author: "Bili CDN Auto contributors"
-version: "0.2.0"
+version: "0.2.2"
 
 http:
   force-http-engine:

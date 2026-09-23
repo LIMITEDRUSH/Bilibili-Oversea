@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>iOS 完整教程 · Bili CDN Auto</title>
+  <style>
+    :root{font:16px/1.65 system-ui,-apple-system,sans-serif;color:#18212b;background:#f4f7fa}*{box-sizing:border-box}body{margin:0;padding:24px 16px}main{max-width:820px;margin:auto}.hero,.card{background:#fff;border:1px solid #dce4eb;border-radius:18px;padding:22px;margin-bottom:14px;box-shadow:0 8px 30px #23384d0b}h1{font-size:28px;margin:0 0 8px}h2{font-size:21px;margin:0 0 12px}h3{font-size:17px;margin:18px 0 6px}p{color:#536170}ol,ul{padding-left:24px}li{margin:6px 0}a{color:#08789f}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}.button{display:block;border-radius:12px;padding:12px 14px;text-decoration:none;text-align:center;font-weight:650;background:#00a1d6;color:#fff}.secondary{background:#eaf3f7;color:#08789f}.warn{border-left:4px solid #ff9f0a;padding:8px 12px;background:#fff8e8;border-radius:8px}.ok{border-left:4px solid #34c759;padding:8px 12px;background:#effbf2;border-radius:8px}code{background:#edf2f5;padding:2px 5px;border-radius:5px;word-break:break-all}.top{display:flex;gap:10px;flex-wrap:wrap}.top a{flex:1;min-width:180px}@media(prefers-color-scheme:dark){:root{color:#eef4f8;background:#10161c}.hero,.card{background:#182129;border-color:#2c3a45}p{color:#a9bac7}.secondary{background:#273944;color:#8fdcff}.warn{background:#352c18}.ok{background:#17331f}code{background:#293640}}
+  </style>
+</head>
+<body><main>
+  <section class="hero"><h1>iOS 完整安装与自动启动教程</h1><p>最终效果：直接点击原版哔哩哔哩 App，iOS 自动连接配置；播放视频时自动实测并选择 CDN。</p><div class="top"><a class="button secondary" href="./">返回安装页</a><a class="button" href="__SHORTCUT__">下载连接 VPN 快捷指令</a></div></section>
+  <section class="card"><h2>开始前</h2><ul><li>推荐 iOS/iPadOS 16.4 或更高版本。</li><li>Surge、Shadowrocket、Loon、Stash 任选一个，不要同时连接多个 VPN。</li><li>网络工具中应已有可正常使用的主配置；本工具不提供代理节点或订阅。</li><li>配置只导入一次，之后打开 B 站不会重复安装。</li></ul></section>
+  <section class="card"><h2>1. 导入配置</h2><p>选择你实际使用的一款工具：</p><div class="grid"><a class="button" href="__SHADOWROCKET__">导入 Shadowrocket</a><a class="button" href="__SURGE__">导入 Surge</a><a class="button" href="__LOON__">导入 Loon</a><a class="button" href="__STASH__">导入 Stash</a></div>
+    <h3>Shadowrocket</h3><ol><li>点击上方按钮并允许 Safari 打开 Shadowrocket。</li><li>确认添加 <code>Bili CDN Auto</code> 模块。</li><li>在配置/模块页面确认模块已启用；回到首页选择平时使用的配置或节点。</li></ol>
+    <h3>Surge</h3><ol><li>点击“导入 Surge”，在模块安装页确认。</li><li>Surge → 当前配置 → 模块，确认 <code>Bili CDN Auto</code> 已启用。</li><li>首次使用保持默认参数。</li></ol>
+    <h3>Loon</h3><ol><li>点击“导入 Loon”，确认添加插件。</li><li>Loon → 配置 → 插件，确认 <code>Bili CDN Auto</code> 已启用。</li></ol>
+    <h3>Stash</h3><ol><li>点击“导入 Stash”，确认安装 Override。</li><li>Stash → 覆写/Override，确认该覆写已启用，且原有主配置仍处于选中状态。</li></ol>
+  </section>
+  <section class="card"><h2>2. 安装并信任自己的证书</h2><p>在所选客户端里找到 MITM、HTTPS 解密、证书或 CA Certificate：</p><ul><li>Shadowrocket：设置 → 证书 → 生成新的 CA → 安装。</li><li>Surge：首页/更多 → MitM → 生成新的 CA → 安装。</li><li>Loon：配置/设置 → MitM → 证书 → 生成并安装。</li><li>Stash：首页 → MitM → CA 证书 → Stash Generated CA → 安装证书。</li></ul><p>然后依次进入：设置 → 通用 → VPN 与设备管理 → 安装已下载的描述文件；再进入设置 → 通用 → 关于本机 → 证书信任设置，为该根证书开启完全信任。最后回到客户端确认 MitM/HTTPS 解密已开启。</p><p class="warn">只使用自己设备上的客户端生成的 CA。不要安装或共享他人的证书、私钥或 .p12 文件。</p></section>
+  <section class="card"><h2>3. 首次连接并验证</h2><ol><li>在网络工具首页启动连接；首次使用时允许 iOS 添加 VPN 配置。</li><li>点击下方“查看状态”，出现含 <code>"ok": true</code> 的 JSON，说明控制脚本已加载。</li><li>打开哔哩哔哩，播放未完整缓存的视频 10–20 秒。</li><li>再次查看状态；<code>selectedHost</code> 应出现当前节点，<code>scores</code> 会显示测速结果。</li></ol><div class="grid"><a class="button secondary" href="http://bili-cdn-auto.invalid/status">查看状态</a><a class="button secondary" href="http://bili-cdn-auto.invalid/retest">重新测速</a></div></section>
+  <section class="card"><h2>4. 安装快捷指令</h2><ol><li><a href="__SHORTCUT__">点击这里安装 BiliCDNAuto-ConnectVPN</a>。</li><li>在快捷指令 App 中确认它只有一个系统“连接 VPN”动作，然后添加。</li><li>如果有多个 VPN，编辑快捷指令，在动作中选中承载 Bili CDN Auto 的客户端。</li><li>手动运行一次并允许连接，确认 VPN 可以正常启动。</li></ol><p class="ok">该快捷指令不会打开网页或代理客户端；它使用 iOS 原生动作在当前 App 内连接 VPN。</p></section>
+  <section class="card"><h2>5. 创建“打开哔哩哔哩时”自动化</h2><ol><li>快捷指令 App → 自动化 → 右上角 <code>+</code> → App。</li><li>选择“哔哩哔哩”，勾选“打开时”。</li><li>选择“立即运行”；运行通知可按需关闭。</li><li>新建空白自动化 → 添加“运行快捷指令”。</li><li>选择 <code>BiliCDNAuto-ConnectVPN</code>，点击完成。</li></ol><p>现在停止 VPN 并关闭 B 站测试。直接点击原版哔哩哔哩图标，VPN 应自动连接，画面仍停留在 B 站。个人自动化由 iOS 保护，下载文件不能替你静默创建，所以这一步只需手动确认一次。</p></section>
+  <section class="card"><h2>6. 后续操作</h2><ul><li>日常：直接打开哔哩哔哩。</li><li>网络改变或变慢：点“重新测速”，再播放未缓存的片段。</li><li>临时停用改写：点“原始 CDN”。</li><li>恢复智能选择：点“自动模式”。</li><li>不要每次打开 App 都强制重测；自动模式会复用仍然健康的结果。</li></ul><div class="grid"><a class="button secondary" href="http://bili-cdn-auto.invalid/auto">自动模式</a><a class="button secondary" href="http://bili-cdn-auto.invalid/original">原始 CDN</a></div></section>
+  <section class="card"><h2>7. 排错</h2><h3>VPN 没自动连接</h3><p>先手动运行快捷指令；检查自动化是否启用、触发 App 是否正确、是否选了“立即运行”，以及“连接 VPN”动作是否指向正确配置。</p><h3>VPN 已连接但没有 selectedHost</h3><p>检查模块/插件/Override、MITM 开关及证书完全信任。换一个新视频或未缓存片段，再点一次重新测速。</p><h3>出现证书错误或无法联网</h3><p>立即停止 VPN，禁用模块后测试；检查证书是否属于自己的客户端，以及是否和其他重写规则冲突。</p><h3>仍然不快</h3><p>候选 CDN 在当前运营商上的线路可能相近，或瓶颈不在 CDN。工具无法保证每条视频都改善。</p></section>
+  <section class="card"><h2>8. 卸载恢复</h2><ol><li>删除“哔哩哔哩打开时”个人自动化。</li><li>删除连接 VPN 快捷指令。</li><li>在网络工具中禁用或删除 Bili CDN Auto。</li><li>若不再使用 MitM，可删除对应证书描述文件。</li><li>停止 VPN；B 站恢复原始 CDN 行为。</li></ol><p><a href="https://github.com/LIMITEDRUSH/Bilibili-Oversea/blob/main/docs/IOS_TUTORIAL.md">查看 Markdown 完整版和参考文档</a></p></section>
+</main></body></html>
