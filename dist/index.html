@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Bili CDN Auto</title>
+  <style>
+    :root{font:16px/1.5 system-ui,-apple-system,sans-serif;color:#18212b;background:#f4f7fa}*{box-sizing:border-box}
+    body{margin:0;padding:28px 18px}main{max-width:680px;margin:auto}.hero,.card{background:#fff;border:1px solid #dce4eb;border-radius:18px;padding:22px;margin-bottom:14px;box-shadow:0 8px 30px #23384d0b}
+    h1{margin:0 0 6px;font-size:28px}h2{margin:0 0 12px;font-size:18px}p{margin:7px 0;color:#536170}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+    a.button,button{display:block;width:100%;border:0;border-radius:12px;padding:12px 14px;text-decoration:none;text-align:center;font:inherit;font-weight:650;cursor:pointer;background:#00a1d6;color:#fff}
+    a.secondary{background:#eaf3f7;color:#08789f}.controls{display:flex;flex-wrap:wrap;gap:8px}.controls a{flex:1;min-width:120px}.note{font-size:13px}.status{min-height:22px;color:#08789f;font-weight:600}
+    @media(prefers-color-scheme:dark){:root{color:#eef4f8;background:#10161c}.hero,.card{background:#182129;border-color:#2c3a45}p{color:#a9bac7}a.secondary{background:#273944;color:#8fdcff}}
+  </style>
+</head>
+<body><main>
+  <section class="hero"><h1>Bili CDN Auto</h1><p>浏览器直接安装扩展；iPhone 选择你正在使用的网络工具导入。所有测速在本机完成。</p></section>
+  <section class="card"><h2>浏览器</h2><div class="grid"><a class="button" href="https://raw.githubusercontent.com/LIMITEDRUSH/Bilibili-Oversea/main/browser-extension/dist/bili-cdn-auto-browser-v1.8.5.zip">下载 Chrome / Edge 扩展</a></div><p class="note">解压后在扩展管理页面开启开发者模式，选择“加载已解压的扩展程序”。安装后默认自动模式。</p></section>
+  <section class="card"><h2>iPhone / iPad 一键导入</h2><div class="grid">
+    <a class="button" href="surge:///install-module?url=https%3A%2F%2Fraw.githubusercontent.com%2FLIMITEDRUSH%2FBilibili-Oversea%2Fmain%2Fdist%2FBiliCDNAuto.surge.sgmodule">导入 Surge</a><a class="button" href="https://www.nsloon.com/openloon/import?plugin=https%3A%2F%2Fraw.githubusercontent.com%2FLIMITEDRUSH%2FBilibili-Oversea%2Fmain%2Fdist%2FBiliCDNAuto.loon.plugin">导入 Loon</a>
+    <a class="button" href="shadowrocket://install?module=https%3A%2F%2Fraw.githubusercontent.com%2FLIMITEDRUSH%2FBilibili-Oversea%2Fmain%2Fdist%2FBiliCDNAuto.shadowrocket.module">导入 Shadowrocket</a><a class="button" href="stash://install-override?url=https%3A%2F%2Fraw.githubusercontent.com%2FLIMITEDRUSH%2FBilibili-Oversea%2Fmain%2Fdist%2FBiliCDNAuto.stash.stoverride">导入 Stash</a>
+    <a class="button secondary" href="https://raw.githubusercontent.com/LIMITEDRUSH/Bilibili-Oversea/main/dist/BiliCDNAuto.quantumultx.snippet">Quantumult X 配置链接</a>
+  </div><p class="note">导入后必须在所选 App 内生成自己的 MITM 证书，并在 iOS 设置中信任。不要安装他人提供的共享证书。</p></section>
+  <section class="card"><h2>快捷控制</h2><div class="controls">
+    <a class="button secondary" href="http://bili-cdn-auto.invalid/retest">重新测速</a>
+    <a class="button secondary" href="http://bili-cdn-auto.invalid/auto">自动模式</a>
+    <a class="button secondary" href="http://bili-cdn-auto.invalid/original">原始 CDN</a>
+    <a class="button secondary" href="http://bili-cdn-auto.invalid/status">查看状态</a>
+  </div><p class="note">这些地址只会被已安装的本机脚本接管，不会连接外部服务器。网络工具未启动时不会生效。</p></section>
+  <section class="card"><h2>启动网络工具</h2><div class="controls">
+    <a class="button secondary" href="surge:///start?autoclose=true">Surge</a><a class="button secondary" href="loon://on">Loon</a>
+    <a class="button secondary" href="shadowrocket://connect?autoclose=true">Shadowrocket</a><a class="button secondary" href="stash://start">Stash</a>
+  </div></section>
+</main></body></html>

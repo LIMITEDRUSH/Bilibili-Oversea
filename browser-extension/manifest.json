@@ -1,0 +1,66 @@
+{
+  "manifest_version": 3,
+  "name": "Bili CDN Auto - B站 CDN 自动优选",
+  "version": "1.8.5",
+  "description": "自动实测并切换 B 站视频 CDN；本地运行、无需全局代理、不上传数据。",
+  "minimum_chrome_version": "111",
+  "icons": {
+    "16": "assets/icons/icon-16.png",
+    "32": "assets/icons/icon-32.png",
+    "48": "assets/icons/icon-48.png",
+    "128": "assets/icons/icon-128.png"
+  },
+  "permissions": [
+    "activeTab",
+    "declarativeNetRequestWithHostAccess",
+    "storage",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "https://www.bilibili.com/*",
+    "https://m.bilibili.com/*",
+    "https://*.bilivideo.com/*"
+  ],
+  "background": {
+    "service_worker": "src/service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Bili CDN Auto",
+    "default_icon": {
+      "16": "assets/icons/icon-16.png",
+      "32": "assets/icons/icon-32.png"
+    },
+    "default_popup": "src/popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.bilibili.com/video/*",
+        "https://www.bilibili.com/bangumi/play/*",
+        "https://www.bilibili.com/cheese/play/*",
+        "https://m.bilibili.com/video/*",
+        "https://m.bilibili.com/bangumi/play/*"
+      ],
+      "js": [
+        "src/page-hook.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://www.bilibili.com/video/*",
+        "https://www.bilibili.com/bangumi/play/*",
+        "https://www.bilibili.com/cheese/play/*",
+        "https://m.bilibili.com/video/*",
+        "https://m.bilibili.com/bangumi/play/*"
+      ],
+      "js": [
+        "src/playback-health.js",
+        "src/content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ]
+}

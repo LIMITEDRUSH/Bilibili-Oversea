@@ -1,0 +1,33 @@
+#!name = Bili CDN Auto
+#!desc = B站视频 CDN 自动实测、缓存与故障切换；支持快捷指令本机控制。
+#!author = Bili CDN Auto contributors
+#!system = iOS,iPadOS
+#!system_version = 15
+#!loon_version = 3.5.1(983)
+#!tag = Bilibili,CDN
+
+[Argument]
+candidates = input,"upos-sz-mirroraliov.bilivideo.com|upos-sz-mirrorcosov.bilivideo.com|upos-sz-mirrorhwov.bilivideo.com",tag=候选 CDN,desc=使用竖线分隔
+cache_ttl = input,3600,type=number,tag=缓存秒数
+health_ttl = input,60,type=number,tag=健康检查秒数
+probe_bytes = input,65536,type=number,tag=测速字节数
+probe_timeout = input,3,type=number,tag=测速超时秒数
+blacklist_ttl = input,300,type=number,tag=黑名单秒数
+failure_threshold = input,2,type=number,tag=失败阈值
+fallback = input,"original",tag=回退方式
+
+[General]
+force-http-engine-hosts = upos-sz-mirror*.bilivideo.com:80, cn-hk-eq-*.bilivideo.com:80, upos-*-mirrorakam.akamaized.net:80, *:4480, *:4483, *:9102
+
+[Script]
+request if ${url} ~= /^http:\/\/bili-cdn-auto\.invalid\//i then script("__BASE_URL__/scripts/control-http.js") with tag="Bili CDN Auto · 本机控制", timeout=5
+request if ${url} ~= /^https?:\/\/(?:[^\/]*\.bilivideo\.com(?::\d+)?|[^\/]*\.mcdn\.bilivideo\.cn(?::\d+)?|[^\/]*\.akamaized\.net(?::\d+)?|[^\/]+:4480)\/upgcxcode\//i then script("__BASE_URL__/scripts/request.js", {${candidates}, ${cache_ttl}, ${health_ttl}, ${probe_bytes}, ${probe_timeout}, ${blacklist_ttl}, ${fallback}}) with tag="Bili CDN Auto · 请求", timeout=12
+response if ${url} ~= /^https?:\/\/(?:[^\/]*\.bilivideo\.com(?::\d+)?|[^\/]*\.mcdn\.bilivideo\.cn(?::\d+)?|[^\/]*\.akamaized\.net(?::\d+)?|[^\/]+:4480)\/upgcxcode\//i then script("__BASE_URL__/scripts/response.js", {${failure_threshold}, ${blacklist_ttl}}) with tag="Bili CDN Auto · 响应", timeout=5
+network-changed then script("__BASE_URL__/scripts/network-changed.js") with tag="Bili CDN Auto · 网络变化", timeout=5
+generic then script("__BASE_URL__/scripts/control.js", "status") with tag="Bili CDN Auto · 状态", img_url="bolt.horizontal.circle.fill.system", timeout=5
+generic then script("__BASE_URL__/scripts/control.js", "retest") with tag="Bili CDN Auto · 重新测速", img_url="arrow.clockwise.system", timeout=5
+generic then script("__BASE_URL__/scripts/control.js", "auto") with tag="Bili CDN Auto · 自动", img_url="wand.and.stars.system", timeout=5
+generic then script("__BASE_URL__/scripts/control.js", "original") with tag="Bili CDN Auto · 原始 CDN", img_url="arrow.uturn.backward.system", timeout=5
+
+[Mitm]
+hostname = *.mcdn.bilivideo.cn, upos-sz-mirror*.bilivideo.com, cn-hk-eq-*.bilivideo.com, upos-*-mirrorakam.akamaized.net
