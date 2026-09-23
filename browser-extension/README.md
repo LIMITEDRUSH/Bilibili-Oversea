@@ -9,7 +9,7 @@
 
 完整步骤见：<https://limitedrush.github.io/Bilibili-Oversea/browser-guide.html>
 
-1. 下载并解压 `bilibili-oversea-browser-v2.0.0.zip`。
+1. 下载并解压 `bilibili-oversea-browser-v2.0.1.zip`。
 2. Chrome 打开 `chrome://extensions`；Edge 打开 `edge://extensions`。
 3. 开启“开发者模式”，点击“加载已解压的扩展程序”。
 4. 选择解压后包含 `manifest.json` 的目录。

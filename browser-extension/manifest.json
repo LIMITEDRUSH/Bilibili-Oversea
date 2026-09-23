@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Bilibili-oversea",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "独立实现的 B 站视频 CDN 本地测速与智能切换工具；无代理、无遥测。",
   "minimum_chrome_version": "111",
   "icons": {

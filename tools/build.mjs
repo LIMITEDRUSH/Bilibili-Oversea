@@ -30,6 +30,14 @@ const templates = [
 const shortcutNames = ["BiliCDNAuto-ConnectVPN.shortcut"];
 
 await fs.mkdir(outDir, { recursive: true });
+await fs.copyFile(
+  path.join(root, "browser-extension", "assets", "icons", "icon-32.png"),
+  path.join(outDir, "favicon.png"),
+);
+await fs.copyFile(
+  path.join(root, "browser-extension", "assets", "icons", "icon-128.png"),
+  path.join(outDir, "icon-128.png"),
+);
 for (const name of templates) {
   const source = await fs.readFile(path.join(templateDir, name), "utf8");
   await fs.writeFile(path.join(outDir, name), source.replaceAll("__BASE_URL__", baseUrl));

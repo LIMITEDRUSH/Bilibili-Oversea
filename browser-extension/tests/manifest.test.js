@@ -9,7 +9,7 @@ const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "u
 
 test("使用独立 2.0 MV3 后台", () => {
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, "2.0.0");
+  assert.equal(manifest.version, "2.0.1");
   assert.equal(manifest.name, "Bilibili-oversea");
   assert.equal(manifest.background.service_worker, "src/worker.js");
 });
@@ -34,4 +34,14 @@ test("页面桥接和隔离脚本分开运行", () => {
 test("清单引用的图标和界面文件存在", () => {
   const files = [manifest.action.default_popup, manifest.background.service_worker, ...Object.values(manifest.icons)];
   for (const file of files) assert.equal(fs.existsSync(path.join(root, file)), true, file);
+});
+
+test("新版图标提供清单要求的全部 PNG 尺寸", () => {
+  for (const [declaredSize, file] of Object.entries(manifest.icons)) {
+    const bytes = fs.readFileSync(path.join(root, file));
+    assert.deepEqual([...bytes.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10], file);
+    assert.equal(bytes.readUInt32BE(16), Number(declaredSize), `${file} width`);
+    assert.equal(bytes.readUInt32BE(20), Number(declaredSize), `${file} height`);
+  }
+  assert.equal(fs.existsSync(path.join(root, "assets/brand/icon-master.png")), true);
 });

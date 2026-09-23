@@ -7,7 +7,7 @@ Bilibili-oversea 2.0 是本项目独立实现的 Manifest V3 扩展。它只在 
 
 打开安装页：<https://limitedrush.github.io/Bilibili-Oversea/>
 
-点击“下载 Chrome / Edge 扩展”，得到 `bilibili-oversea-browser-v2.0.0.zip`。
+点击“下载 Chrome / Edge 扩展”，得到 `bilibili-oversea-browser-v2.0.1.zip`。
 
 浏览器不能直接加载 ZIP。先在文件管理器中把它完整解压到一个不会随手删除的目录，例如
 `Documents/BiliCDNAuto`。打开该目录后应直接看到 `manifest.json`、`src` 和 `assets`。
@@ -18,7 +18,7 @@ Bilibili-oversea 2.0 是本项目独立实现的 Manifest V3 扩展。它只在 
 2. 打开页面右上角的“开发者模式”。
 3. 点击“加载已解压的扩展程序”。
 4. 选择刚才解压且直接包含 `manifest.json` 的目录。
-5. 列表中出现 `Bilibili-oversea 2.0.0` 即安装成功。
+5. 列表中出现 `Bilibili-oversea 2.0.1` 和青色全球加速图标，即安装成功。
 
 ## 3. 安装到 Edge
 
