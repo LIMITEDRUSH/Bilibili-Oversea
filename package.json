@@ -1,13 +1,14 @@
 {
   "name": "bili-cdn-auto",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Local Bilibili CDN optimizer for Chromium browsers and iOS network tools",
   "license": "MIT",
   "scripts": {
     "test": "node --test tests/*.test.js && npm --prefix browser-extension test",
-    "check": "node --check scripts/request.js && node --check scripts/response.js && node --check scripts/control.js && node --check scripts/control-http.js && node --check scripts/network-changed.js && npm --prefix browser-extension run check",
+    "check": "node --check scripts/request.js && node --check scripts/response.js && node --check scripts/control.js && node --check scripts/control-http.js && node --check scripts/network-changed.js && node --check tools/build.mjs && node --check tools/package-shortcut.mjs && node --check tools/shortcut-definition.mjs && npm --prefix browser-extension run check",
     "build": "node tools/build.mjs",
-    "package:browser": "npm --prefix browser-extension run package"
+    "package:browser": "npm --prefix browser-extension run package",
+    "package:shortcut": "node tools/package-shortcut.mjs"
   }
 }

@@ -3,7 +3,7 @@
 **安装入口：<https://limitedrush.github.io/Bilibili-Oversea/>**
 
 浏览器版可直接从安装入口下载；iPhone/iPad 在同一页面选择 Surge、Loon、Shadowrocket 或 Stash
-即可一键导入。
+一键导入，并可安装“连接 VPN”快捷指令。
 
 一个本地运行、无遥测的 B 站视频 CDN 自动优选工具：
 
@@ -28,7 +28,7 @@ npm run build -- --base-url=https://raw.githubusercontent.com/你的用户名/�
 ```
 
 把生成的 `dist/` 一并提交，再打开 GitHub Pages 地址。页面提供
-Surge、Loon、Shadowrocket、Stash 的一键导入按钮、启动按钮和本机控制按钮。
+Surge、Loon、Shadowrocket、Stash 的一键导入按钮、iOS 自动化助手和本机控制按钮。
 
 导入后，在所选网络工具里生成自己的 MITM CA，并按照 App 和 iOS 的提示安装、信任。
 不要使用别人提供的共享证书或私钥。
@@ -46,16 +46,22 @@ Surge、Loon、Shadowrocket、Stash 的一键导入按钮、启动按钮和本�
 浏览器版还会观察前向缓冲趋势，在明显接近卡顿时尝试下一个已经验证的节点。iOS 版受网络扩展脚本接口限制，
 失败切换发生在下一条媒体请求。
 
-## 快捷指令
+## 点原版哔哩哔哩自动启动
 
-快捷指令不保存 API 密钥。最简单的“打开 B 站”快捷指令是：
+安装页提供经过 Apple “任何人可导入”模式签名的 `BiliCDNAuto-ConnectVPN.shortcut`。它只执行
+iOS 原生“连接 VPN”动作，不保存 API 密钥，也不会打开第三方网页。
 
-1. 打开所用客户端的 URL Scheme；
-2. 等待 1 秒；
-3. 打开“哔哩哔哩”App。
+在 iPhone/iPad 上进行一次设置：
 
-客户端启动地址及“重新测速”“自动模式”“恢复原始 CDN”等快捷指令步骤见
-[`ios/SHORTCUTS.md`](ios/SHORTCUTS.md)。
+1. 从安装页添加“Bili CDN Auto · 连接 VPN”快捷指令；
+2. 快捷指令 → 自动化 → `+` → App → 选择“哔哩哔哩”及“打开时”；
+3. 选择“立即运行”，添加“运行快捷指令”，选中刚安装的快捷指令。
+
+以后直接点击原版哔哩哔哩 App 即可。自动化会在当前 App 内连接已配置的 VPN，首个视频请求出现时自动测速。
+如果设备有多个 VPN，请编辑快捷指令里的“连接 VPN”动作，选择正在使用的网络工具。
+
+iOS 出于安全原因不允许下载内容替用户静默创建“个人自动化”，所以上述自动化必须在设备上确认一次。详细步骤和
+URL Scheme 备用方案见 [`ios/SHORTCUTS.md`](ios/SHORTCUTS.md)。
 
 统一的本机控制地址：
 
@@ -83,6 +89,7 @@ Surge、Loon、Shadowrocket、Stash 的一键导入按钮、启动按钮和本�
 npm test
 npm run check
 npm run package:browser
+npm run package:shortcut # 需要 macOS；使用 Apple Shortcuts 签名
 npm run build -- --base-url=https://raw.githubusercontent.com/USER/REPO/main
 ```
 

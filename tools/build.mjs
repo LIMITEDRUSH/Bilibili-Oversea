@@ -24,11 +24,15 @@ const templates = [
   "BiliCDNAuto.stash.stoverride",
   "BiliCDNAuto.quantumultx.snippet",
 ];
+const shortcutNames = ["BiliCDNAuto-ConnectVPN.shortcut"];
 
 await fs.mkdir(outDir, { recursive: true });
 for (const name of templates) {
   const source = await fs.readFile(path.join(templateDir, name), "utf8");
   await fs.writeFile(path.join(outDir, name), source.replaceAll("__BASE_URL__", baseUrl));
+}
+for (const name of shortcutNames) {
+  await fs.copyFile(path.join(root, "ios", "shortcuts", name), path.join(outDir, name));
 }
 
 const configUrls = Object.fromEntries(templates.map((name) => [name, `${baseUrl}/dist/${name}`]));
@@ -39,6 +43,7 @@ const links = {
   stash: `stash://install-override?url=${encodeURIComponent(configUrls[templates[3]])}`,
   quantumultx: configUrls[templates[4]],
   browser: `${baseUrl}/browser-extension/dist/bili-cdn-auto-browser-v1.8.5.zip`,
+  shortcut: `./${shortcutNames[0]}`,
 };
 
 let html = await fs.readFile(path.join(root, "site", "install.template.html"), "utf8");
@@ -51,4 +56,6 @@ await fs.writeFile(
   `${JSON.stringify({ baseUrl, generatedAt: new Date().toISOString(), links }, null, 2)}\n`,
 );
 
-console.log(`Built ${templates.length} iOS configs and install page in ${outDir}`);
+console.log(
+  `Built ${templates.length} iOS configs, ${shortcutNames.length} signed shortcut and install page in ${outDir}`,
+);
