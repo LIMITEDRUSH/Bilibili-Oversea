@@ -21,12 +21,15 @@ for (const file of ["manifest.json", "LICENSE", "README.md", "PRIVACY.md", "SECU
 await fs.cp(path.join(extensionRoot, "src"), path.join(stagingDir, "src"), { recursive: true });
 await fs.cp(path.join(extensionRoot, "assets", "icons"), path.join(stagingDir, "assets", "icons"), { recursive: true });
 
-const zipped = spawnSync("zip", ["-X", "-q", "-r", archivePath, "."], {
+const zipCommand = process.platform === "win32"
+  ? ["tar", ["-a", "-c", "-f", archivePath, "."]]
+  : ["zip", ["-X", "-q", "-r", archivePath, "."]];
+const zipped = spawnSync(zipCommand[0], zipCommand[1], {
   cwd: stagingDir,
   encoding: "utf8",
 });
 await fs.rm(stagingDir, { recursive: true, force: true });
-if (zipped.status !== 0) throw new Error(zipped.stderr || "zip packaging failed");
+if (zipped.status !== 0) throw new Error(zipped.error?.message || zipped.stderr || "zip packaging failed");
 
 const bytes = await fs.readFile(archivePath);
 console.log(path.relative(extensionRoot, archivePath));

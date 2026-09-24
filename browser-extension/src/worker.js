@@ -6,7 +6,6 @@ import {
   makeRedirectRule,
   publicTabState,
   rankResults,
-  replaceMediaHost,
   resultFromTiming,
   sanitizeSettings,
   uniqueHosts,
@@ -89,50 +88,37 @@ async function applyTarget(tabId, targetHost, phase = "active") {
   await publish(tabId);
 }
 
-async function readAtMost(response, limit) {
-  if (!response.body) return 0;
-  const reader = response.body.getReader();
-  let bytes = 0;
+async function probeCandidates(tabId, sourceUrl, candidates) {
+  let response;
   try {
-    while (bytes < limit) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      bytes += value?.byteLength || 0;
-    }
-  } finally {
-    await reader.cancel().catch(() => {});
-  }
-  return Math.min(bytes, limit);
-}
-
-async function probe(sourceUrl, host) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-  const started = performance.now();
-  let ttfb = 0;
-  try {
-    const response = await fetch(replaceMediaHost(sourceUrl, host), {
-      cache: "no-store",
-      credentials: "omit",
-      headers: { Range: `bytes=0-${PROBE_BYTES - 1}` },
-      redirect: "follow",
-      referrerPolicy: "no-referrer",
-      signal: controller.signal,
-    });
-    ttfb = performance.now() - started;
-    const bytes = response.ok ? await readAtMost(response, PROBE_BYTES) : 0;
-    return resultFromTiming({
-      host, ok: response.ok, status: response.status, bytes,
-      elapsedMs: performance.now() - started, ttfbMs: ttfb,
+    response = await chrome.tabs.sendMessage(tabId, {
+      type: "probe-candidates",
+      sourceUrl,
+      hosts: candidates,
+      byteLimit: PROBE_BYTES,
+      timeoutMs: PROBE_TIMEOUT_MS,
     });
   } catch (error) {
-    return resultFromTiming({
-      host, ok: false, elapsedMs: performance.now() - started, ttfbMs: ttfb,
-      error: error?.name === "AbortError" ? "timeout" : String(error?.message || error),
-    });
-  } finally {
-    clearTimeout(timeout);
+    response = { ok: false, error: String(error?.message || error), results: [] };
   }
+  const rawResults = Array.isArray(response?.results) ? response.results : [];
+  const byHost = new Map(rawResults
+    .filter((item) => candidates.includes(String(item?.host || "").toLowerCase()))
+    .map((item) => [String(item.host).toLowerCase(), item]));
+  return candidates.map((host) => {
+    const item = byHost.get(host);
+    return resultFromTiming({
+      host,
+      ok: item?.ok === true,
+      status: Number(item?.status) || 0,
+      bytes: Math.min(PROBE_BYTES, Math.max(0, Number(item?.bytes) || 0)),
+      elapsedMs: Math.max(0, Number(item?.elapsedMs) || 0),
+      ttfbMs: Math.max(0, Number(item?.ttfbMs) || 0),
+      error: item
+        ? (item.error || "")
+        : (response?.error || (response?.ok === false ? "probe unavailable" : "missing result")),
+    });
+  });
 }
 
 async function benchmark(tabId, reason = "automatic") {
@@ -152,7 +138,7 @@ async function benchmark(tabId, reason = "automatic") {
     await setBadge(tabId, "testing");
     await publish(tabId);
 
-    const results = await Promise.all(candidates.map((host) => probe(sourceUrl, host)));
+    const results = await probeCandidates(tabId, sourceUrl, candidates);
     if (runId !== state.runId) return null;
     state.results = results;
     state.lastTestedAt = Date.now();

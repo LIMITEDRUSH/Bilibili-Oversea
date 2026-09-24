@@ -9,7 +9,7 @@ const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "u
 
 test("使用独立 2.0 MV3 后台", () => {
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, "2.0.1");
+  assert.equal(manifest.version, "2.0.2");
   assert.equal(manifest.name, "Bilibili-oversea");
   assert.equal(manifest.background.service_worker, "src/worker.js");
 });

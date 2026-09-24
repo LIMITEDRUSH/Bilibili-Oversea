@@ -4,6 +4,7 @@ import test from "node:test";
 test("后台收到媒体地址后测速并建立当前标签页规则", async () => {
   let messageListener;
   const ruleUpdates = [];
+  const probeMessages = [];
   const storage = {};
   const noopEvent = { addListener() {} };
   globalThis.chrome = {
@@ -28,16 +29,22 @@ test("后台收到媒体地址后测速并建立当前标签页规则", async ()
     tabs: {
       onRemoved: noopEvent,
       onUpdated: noopEvent,
-      sendMessage: async () => {},
+      sendMessage: async (_tabId, message) => {
+        if (message.type !== "probe-candidates") return undefined;
+        probeMessages.push(message);
+        return {
+          ok: true,
+          results: message.hosts.map((host) => ({
+            host,
+            ok: true,
+            status: 206,
+            bytes: 2_048,
+            elapsedMs: host.includes("cosov") ? 1 : host.includes("hwov") ? 4 : 8,
+            ttfbMs: 1,
+          })),
+        };
+      },
     },
-  };
-
-  const nativeFetch = globalThis.fetch;
-  globalThis.fetch = async (value) => {
-    const host = new URL(value).hostname;
-    const delay = host.includes("cosov") ? 1 : host.includes("hwov") ? 4 : host.includes("aliov") ? 8 : 12;
-    await new Promise((resolve) => setTimeout(resolve, delay));
-    return new Response(new Uint8Array(2_048), { status: 206 });
   };
 
   try {
@@ -50,12 +57,17 @@ test("后台收到媒体地址后测速并建立当前标签页规则", async ()
       assert.equal(keepAlive, true);
     });
     assert.equal(response.ok, true);
+    assert.equal(probeMessages.length, 1);
+    assert.equal(probeMessages[0].sourceUrl, "https://origin.bilivideo.com/upgcxcode/a/video.m4s?token=1");
+    const state = await new Promise((resolve) => {
+      messageListener({ type: "get-state", tabId: 42 }, {}, resolve);
+    });
+    assert.equal(state.state.results[0].error, "");
     const applied = ruleUpdates.find((update) => update.addRules?.length);
     assert.ok(applied);
     assert.deepEqual(applied.addRules[0].condition.tabIds, [42]);
     assert.equal(applied.addRules[0].action.redirect.transform.host, "upos-sz-mirrorcosov.bilivideo.com");
   } finally {
-    globalThis.fetch = nativeFetch;
     delete globalThis.chrome;
   }
 });

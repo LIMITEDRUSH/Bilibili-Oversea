@@ -9,7 +9,7 @@
 
 完整步骤见：<https://limitedrush.github.io/Bilibili-Oversea/browser-guide.html>
 
-1. 下载并解压 `bilibili-oversea-browser-v2.0.1.zip`。
+1. 下载并解压 `bilibili-oversea-browser-v2.0.2.zip`。
 2. Chrome 打开 `chrome://extensions`；Edge 打开 `edge://extensions`。
 3. 开启“开发者模式”，点击“加载已解压的扩展程序”。
 4. 选择解压后包含 `manifest.json` 的目录。
@@ -19,7 +19,7 @@
 
 - 只读观察 B 站 `playurl` 响应，页面桥接脚本不修改播放器数据；
 - 从当前视频带签名的真实媒体 URL 派生候选请求；
-- 每个候选最多读取 128 KB Range 数据，在本机比较吞吐量和首包；
+- 在当前 B 站标签页的隔离内容脚本中保留正常播放 Referer，每个候选最多读取 128 KB Range 数据，在本机比较吞吐量和首包；
 - 仅为当前 B 站播放标签页添加 Chrome 会话重定向规则；
 - 播放器持续低缓冲或触发 `waiting/stalled` 时切换到下一个已验证节点；
 - 支持自动优选、立即重测、固定节点、禁用节点和恢复原始 CDN。
