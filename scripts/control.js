@@ -23,7 +23,7 @@ function readState() {
 }
 
 function writeState(state) {
-  state.version = 1;
+  state.version = 2;
   if (typeof $persistentStore !== "undefined") {
     $persistentStore.write(JSON.stringify(state), STORE_KEY);
   } else {
@@ -59,7 +59,8 @@ function statusText(state) {
     `模式：${mode}`,
     `当前：${selected}`,
     `网络：${state.network || "未知"}`,
-    `缓存：${remaining(state.expiresAt)}`,
+    `完整缓存：${remaining(state.expiresAt)}`,
+    `轻量复核：${state.lastVerifiedAt ? new Date(state.lastVerifiedAt).toLocaleTimeString() : "尚未"}`,
     scores ? `最近测速：\n${scores}` : "最近测速：无",
   ].join("\n");
 }
@@ -92,8 +93,14 @@ if (isPanel) {
     state.blacklist = {};
     state.lastHealthAt = 0;
     state.lastSuccessAt = 0;
+    state.lastFullTestedAt = 0;
+    state.lastVerifiedAt = 0;
+    state.fullRetestAfter = 0;
+    state.videoKey = "";
+    state.videoFirstSeenAt = 0;
+    state.verifiedVideoKey = "";
     subtitle = "已清除测速缓存";
-    body = "下一条 B 站视频请求将重新测试所有候选 CDN。";
+    body = "下一条请求先正常开播，15 秒后的后续请求再测试候选 CDN。";
   } else if (command === "auto") {
     state.forcedHost = null;
     state.selectedHost = null;
@@ -101,8 +108,14 @@ if (isPanel) {
     state.noWinnerUntil = 0;
     state.lastHealthAt = 0;
     state.lastSuccessAt = 0;
+    state.lastFullTestedAt = 0;
+    state.lastVerifiedAt = 0;
+    state.fullRetestAfter = 0;
+    state.videoKey = "";
+    state.videoFirstSeenAt = 0;
+    state.verifiedVideoKey = "";
     subtitle = "已切换到自动模式";
-    body = "下一条 B 站视频请求将自动测速。";
+    body = "下一条请求先正常开播，安全延迟后再自动测速。";
   } else if (command === "original" || command === "off") {
     state.forcedHost = "original";
     subtitle = "已使用原始 CDN";

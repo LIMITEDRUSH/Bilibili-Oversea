@@ -38,6 +38,8 @@ function summary(state) {
     selectedHost: state.selectedHost || "",
     network: state.network || "unknown",
     expiresAt: state.expiresAt || 0,
+    lastFullTestedAt: state.lastFullTestedAt || 0,
+    lastVerifiedAt: state.lastVerifiedAt || 0,
     scores: Array.isArray(state.scores) ? state.scores : [],
   };
 }
@@ -61,13 +63,25 @@ if (command === "retest") {
   state.blacklist = {};
   state.lastHealthAt = 0;
   state.lastSuccessAt = 0;
-  message = "缓存已清除；下一条视频请求将重新测速";
+  state.lastFullTestedAt = 0;
+  state.lastVerifiedAt = 0;
+  state.fullRetestAfter = 0;
+  state.videoKey = "";
+  state.videoFirstSeenAt = 0;
+  state.verifiedVideoKey = "";
+  message = "缓存已清除；下一条请求先正常开播，15 秒后的后续请求再测速";
 } else if (command === "auto") {
   state.forcedHost = null;
   state.selectedHost = null;
   state.expiresAt = 0;
   state.noWinnerUntil = 0;
-  message = "已切换到自动模式";
+  state.lastFullTestedAt = 0;
+  state.lastVerifiedAt = 0;
+  state.fullRetestAfter = 0;
+  state.videoKey = "";
+  state.videoFirstSeenAt = 0;
+  state.verifiedVideoKey = "";
+  message = "已切换到自动模式；下一条请求先正常开播，安全延迟后再测速";
 } else if (command === "original" || command === "off") {
   state.forcedHost = "original";
   message = "已恢复 B 站原始 CDN";
@@ -82,7 +96,7 @@ if (command === "retest") {
   }
 }
 
-state.version = 1;
+state.version = 2;
 store.write(JSON.stringify(state), STORE_KEY);
 const body = JSON.stringify({ ok: true, command, message, ...summary(state) }, null, 2);
 const headers = {

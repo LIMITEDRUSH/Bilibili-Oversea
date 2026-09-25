@@ -1,7 +1,7 @@
 name: "Bili CDN Auto"
-desc: "B站视频 CDN 自动实测、缓存与故障切换；支持快捷指令本机控制。"
+desc: "B站视频 CDN 无阻塞开播、自适应复核与故障切换；支持快捷指令本机控制。"
 author: "Bili CDN Auto contributors"
-version: "0.2.2"
+version: "0.3.4"
 
 http:
   force-http-engine:
@@ -24,12 +24,12 @@ http:
       match: ^https?:\/\/(?:[^\/]*\.bilivideo\.com(?::\d+)?|[^\/]*\.mcdn\.bilivideo\.cn(?::\d+)?|[^\/]*\.akamaized\.net(?::\d+)?|[^\/]+:4480)\/upgcxcode\/
       type: request
       timeout: 12
-      argument: "candidates=upos-sz-mirroraliov.bilivideo.com|upos-sz-mirrorcosov.bilivideo.com|upos-sz-mirrorhwov.bilivideo.com&cache_ttl=3600&health_ttl=60&probe_bytes=65536&probe_timeout=3&blacklist_ttl=300&fallback=original"
+      argument: "candidates=upos-sz-mirroraliov.bilivideo.com|upos-sz-mirrorcosov.bilivideo.com|upos-sz-mirrorhwov.bilivideo.com&success_ttl=10800&failure_ttl=600&verify_interval=900&verify_delay=15&quick_probe_bytes=131072&verify_probe_bytes=131072&quick_probe_timeout=4&switch_gain=120&fallback=original"
     - name: "Bili CDN Auto · Response"
       match: ^https?:\/\/(?:[^\/]*\.bilivideo\.com(?::\d+)?|[^\/]*\.mcdn\.bilivideo\.cn(?::\d+)?|[^\/]*\.akamaized\.net(?::\d+)?|[^\/]+:4480)\/upgcxcode\/
       type: response
       timeout: 5
-      argument: "failure_threshold=2&blacklist_ttl=300"
+      argument: "failure_threshold=2&failure_ttl=600&success_ttl=10800"
 
 script-providers:
   "Bili CDN Auto · Local Control":

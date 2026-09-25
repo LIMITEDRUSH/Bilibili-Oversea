@@ -10,7 +10,7 @@ const STORE_KEY = "bili-cdn-auto-state-v1";
 
 function execute(scriptName, globals) {
   const source = fs.readFileSync(path.join(__dirname, "..", "scripts", scriptName), "utf8");
-  vm.runInNewContext(source, { URL, console, ...globals }, { filename: scriptName });
+  vm.runInNewContext(source, { URL, console, setTimeout, clearTimeout, ...globals }, { filename: scriptName });
 }
 
 function executeAsync(scriptName, globals) {
@@ -33,25 +33,31 @@ function memoryStore(initialState) {
   };
 }
 
-test("response script blacklists a repeatedly failing selected CDN", () => {
+test("response script immediately rotates to a verified backup after failure", () => {
+  const now = Date.now();
   const store = memoryStore({
-    selectedHost: "bad.example.com",
-    expiresAt: Date.now() + 60000,
+    selectedHost: "bad.bilivideo.com",
+    expiresAt: now + 60000,
     failureCount: 1,
+    scores: [
+      { host: "bad.bilivideo.com", ok: true, kbps: 1000, sampledAt: now },
+      { host: "backup.bilivideo.com", ok: true, kbps: 800, sampledAt: now },
+    ],
   });
   let completed = false;
   execute("response.js", {
-    $argument: "failure_threshold=2&blacklist_ttl=300",
+    $argument: "failure_threshold=2&failure_ttl=600&success_ttl=10800",
     $persistentStore: store,
-    $request: { url: "https://bad.example.com/upgcxcode/a.m4s" },
+    $request: { url: "https://bad.bilivideo.com/upgcxcode/a.m4s" },
     $response: { status: 503 },
     $notification: { post() {} },
     $done() { completed = true; },
   });
   const state = store.state();
   assert.equal(completed, true);
-  assert.equal(state.selectedHost, null);
-  assert.ok(state.blacklist["bad.example.com"] > Date.now());
+  assert.equal(state.selectedHost, "backup.bilivideo.com");
+  assert.ok(state.blacklist["bad.bilivideo.com"] > Date.now());
+  assert.ok(state.fullRetestAfter > Date.now());
 });
 
 test("control script retest command clears automatic state", () => {
@@ -89,6 +95,15 @@ test("network change preserves a manual override but invalidates auto selection"
 
 test("request script supports Quantumult X task and prefs APIs", async () => {
   const values = new Map();
+  const now = Date.now();
+  values.set(STORE_KEY, JSON.stringify({
+    network: "network:unknown:unknown",
+    videoKey: "/upgcxcode/a.m4s",
+    videoFirstSeenAt: now - 20000,
+    fullRetestAfter: now - 1,
+    blacklist: {},
+    scores: [],
+  }));
   const result = await executeAsync("request.js", {
     $request: {
       url: "https://source.bilivideo.com/upgcxcode/a.m4s?token=1",

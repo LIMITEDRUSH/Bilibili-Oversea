@@ -1,6 +1,6 @@
 {
   "name": "bili-cdn-auto",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": true,
   "description": "Local Bilibili CDN optimizer for Chromium browsers and iOS network tools",
   "license": "MIT",

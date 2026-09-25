@@ -1,16 +1,16 @@
 #!name=Bili CDN Auto
-#!desc=B站视频 CDN 自动实测、缓存与故障切换；支持快捷指令本机控制。
+#!desc=B站视频 CDN 无阻塞开播、自适应复核与故障切换；支持快捷指令本机控制。
 #!author=Bili CDN Auto contributors
-#!arguments=candidates:upos-sz-mirroraliov.bilivideo.com|upos-sz-mirrorcosov.bilivideo.com|upos-sz-mirrorhwov.bilivideo.com,cache_ttl:3600,health_ttl:60,probe_bytes:65536,probe_timeout:3,blacklist_ttl:300,failure_threshold:2,fallback:original
-#!arguments-desc=候选主机用竖线分隔；缓存、健康检查和黑名单单位为秒。
+#!arguments=candidates:upos-sz-mirroraliov.bilivideo.com|upos-sz-mirrorcosov.bilivideo.com|upos-sz-mirrorhwov.bilivideo.com,success_ttl:10800,failure_ttl:600,verify_interval:900,verify_delay:15,quick_probe_bytes:131072,verify_probe_bytes:131072,quick_probe_timeout:4,switch_gain:120,failure_threshold:2,fallback:original
+#!arguments-desc=新视频立即走缓存或原始 CDN；15 秒后轻量复核。时间单位为秒，switch_gain 为百分比。
 
 [General]
 force-http-engine-hosts = %APPEND% upos-sz-mirror*.bilivideo.com:80, cn-hk-eq-*.bilivideo.com:80, upos-*-mirrorakam.akamaized.net:80, *:4480, *:4483, *:9102
 
 [Script]
 Bili CDN Auto · Local Control = type=http-request, pattern=^http:\/\/bili-cdn-auto\.invalid\/, script-path=__BASE_URL__/scripts/control-http.js, timeout=5
-Bili CDN Auto · Request = type=http-request, pattern=^https?:\/\/(?:[^\/]*\.bilivideo\.com(?::\d+)?|[^\/]*\.mcdn\.bilivideo\.cn(?::\d+)?|[^\/]*\.akamaized\.net(?::\d+)?|[^\/]+:4480)\/upgcxcode\/, script-path=__BASE_URL__/scripts/request.js, timeout=12, argument="candidates={{{candidates}}}&cache_ttl={{{cache_ttl}}}&health_ttl={{{health_ttl}}}&probe_bytes={{{probe_bytes}}}&probe_timeout={{{probe_timeout}}}&blacklist_ttl={{{blacklist_ttl}}}&fallback={{{fallback}}}"
-Bili CDN Auto · Response = type=http-response, pattern=^https?:\/\/(?:[^\/]*\.bilivideo\.com(?::\d+)?|[^\/]*\.mcdn\.bilivideo\.cn(?::\d+)?|[^\/]*\.akamaized\.net(?::\d+)?|[^\/]+:4480)\/upgcxcode\/, script-path=__BASE_URL__/scripts/response.js, timeout=5, argument="failure_threshold={{{failure_threshold}}}&blacklist_ttl={{{blacklist_ttl}}}"
+Bili CDN Auto · Request = type=http-request, pattern=^https?:\/\/(?:[^\/]*\.bilivideo\.com(?::\d+)?|[^\/]*\.mcdn\.bilivideo\.cn(?::\d+)?|[^\/]*\.akamaized\.net(?::\d+)?|[^\/]+:4480)\/upgcxcode\/, script-path=__BASE_URL__/scripts/request.js, timeout=12, argument="candidates={{{candidates}}}&success_ttl={{{success_ttl}}}&failure_ttl={{{failure_ttl}}}&verify_interval={{{verify_interval}}}&verify_delay={{{verify_delay}}}&quick_probe_bytes={{{quick_probe_bytes}}}&verify_probe_bytes={{{verify_probe_bytes}}}&quick_probe_timeout={{{quick_probe_timeout}}}&switch_gain={{{switch_gain}}}&fallback={{{fallback}}}"
+Bili CDN Auto · Response = type=http-response, pattern=^https?:\/\/(?:[^\/]*\.bilivideo\.com(?::\d+)?|[^\/]*\.mcdn\.bilivideo\.cn(?::\d+)?|[^\/]*\.akamaized\.net(?::\d+)?|[^\/]+:4480)\/upgcxcode\/, script-path=__BASE_URL__/scripts/response.js, timeout=5, argument="failure_threshold={{{failure_threshold}}}&failure_ttl={{{failure_ttl}}}&success_ttl={{{success_ttl}}}"
 Bili CDN Auto · Network Changed = type=event, event-name=network-changed, script-path=__BASE_URL__/scripts/network-changed.js, timeout=5
 
 [MITM]

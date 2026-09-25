@@ -1,10 +1,13 @@
 #!name=Bili CDN Auto
-#!desc=B站视频 CDN 自动实测、缓存与故障切换；使用本机控制 URL 配合快捷指令。
+#!desc=B站视频 CDN 无阻塞开播、自适应复核与故障切换；使用本机控制 URL 配合快捷指令。
 
 [rewrite_local]
 ^http:\/\/bili-cdn-auto\.invalid\/ url script-request-header https://raw.githubusercontent.com/LIMITEDRUSH/Bilibili-Oversea/main/scripts/control-http.js
 ^https?:\/\/(?:[^\/]*\.bilivideo\.com(?::\d+)?|[^\/]*\.mcdn\.bilivideo\.cn(?::\d+)?|[^\/]*\.akamaized\.net(?::\d+)?|[^\/]+:4480)\/upgcxcode\/ url script-request-header https://raw.githubusercontent.com/LIMITEDRUSH/Bilibili-Oversea/main/scripts/request.js
 ^https?:\/\/(?:[^\/]*\.bilivideo\.com(?::\d+)?|[^\/]*\.mcdn\.bilivideo\.cn(?::\d+)?|[^\/]*\.akamaized\.net(?::\d+)?|[^\/]+:4480)\/upgcxcode\/ url script-response-header https://raw.githubusercontent.com/LIMITEDRUSH/Bilibili-Oversea/main/scripts/response.js
+
+[task_local]
+event-network https://raw.githubusercontent.com/LIMITEDRUSH/Bilibili-Oversea/main/scripts/network-changed.js, tag=Bili CDN Auto · 网络变化, enabled=true
 
 [mitm]
 hostname = *.mcdn.bilivideo.cn, upos-sz-mirror*.bilivideo.com, cn-hk-eq-*.bilivideo.com, upos-*-mirrorakam.akamaized.net
