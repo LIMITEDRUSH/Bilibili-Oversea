@@ -9,7 +9,16 @@ export const DEFAULT_SETTINGS = Object.freeze({
   mode: "auto",
   manualHost: "",
   disabledHosts: [],
-  refreshMinutes: 30,
+});
+
+export const ADAPTIVE_POLICY = Object.freeze({
+  lightVerifyIntervalMs: 15 * 60 * 1000,
+  successCacheMs: 3 * 60 * 60 * 1000,
+  failureCacheMs: 10 * 60 * 1000,
+  safeBufferSeconds: 12,
+  lightProbeBytes: 256 * 1024,
+  lightProbeTimeoutMs: 5_000,
+  switchGainRatio: 1.2,
 });
 
 export function isBiliVideoHost(value) {
@@ -79,13 +88,11 @@ export function sanitizeSettings(input = {}) {
     ? input.mode
     : DEFAULT_SETTINGS.mode;
   const manualHost = isBiliVideoHost(input.manualHost) ? input.manualHost.toLowerCase() : "";
-  const refresh = Number(input.refreshMinutes);
   return {
     enabled: input.enabled !== false,
     mode,
     manualHost,
     disabledHosts: uniqueHosts(input.disabledHosts, 24),
-    refreshMinutes: [0, 15, 30, 60].includes(refresh) ? refresh : 30,
   };
 }
 
@@ -103,8 +110,41 @@ export function resultFromTiming({
     ttfbMs: Math.round(Math.max(0, Number(ttfbMs) || 0)),
     kbps: Math.round((safeBytes * 8) / safeMs),
     error: String(error || "").slice(0, 120),
-    stage: stage === "sustained" ? "sustained" : "quick",
+    stage: ["sustained", "verify"].includes(stage) ? stage : "quick",
   };
+}
+
+export function sanitizeBenchmarkCache(input = {}, now = Date.now()) {
+  const timestamp = Number(now) || Date.now();
+  const results = [];
+  for (const item of Array.isArray(input.results) ? input.results : []) {
+    if (!item || !isBiliVideoHost(item.host)) continue;
+    const sampledAt = Number(item.sampledAt) || 0;
+    const ttl = item.ok ? ADAPTIVE_POLICY.successCacheMs : ADAPTIVE_POLICY.failureCacheMs;
+    if (!sampledAt || timestamp - sampledAt > ttl || sampledAt > timestamp + 60_000) continue;
+    results.push({
+      ...resultFromTiming(item),
+      sampledAt,
+    });
+  }
+  const ranked = rankResults(results);
+  const requestedWinner = String(input.winnerHost || "").toLowerCase();
+  const winnerHost = ranked.some((item) => item.host === requestedWinner)
+    ? requestedWinner
+    : (ranked[0]?.host || "");
+  return {
+    winnerHost,
+    results,
+    lastFullTestedAt: Math.max(0, Number(input.lastFullTestedAt) || 0),
+    lastVerifiedAt: Math.max(0, Number(input.lastVerifiedAt) || 0),
+  };
+}
+
+export function shouldSwitchAfterVerification(current, alternative, ratio = ADAPTIVE_POLICY.switchGainRatio) {
+  if (!alternative?.ok) return false;
+  if (!current?.ok) return true;
+  const requiredRatio = Math.max(1, Number(ratio) || ADAPTIVE_POLICY.switchGainRatio);
+  return alternative.kbps >= current.kbps * requiredRatio;
 }
 
 export function rankResults(results, currentHost = "") {
@@ -155,6 +195,7 @@ export function publicTabState(state) {
     lastDetectedAt: Number(state.lastDetectedAt) || 0,
     results: Array.isArray(state.results) ? state.results.slice(0, 12) : [],
     lastTestedAt: Number(state.lastTestedAt) || 0,
+    lastVerifiedAt: Number(state.lastVerifiedAt) || 0,
     lastError: String(state.lastError || ""),
   };
 }

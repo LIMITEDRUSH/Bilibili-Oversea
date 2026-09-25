@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  isBiliMediaHost, isBiliVideoHost, isMediaUrl, makeRedirectRule, rankResults, replaceMediaHost,
-  resultFromTiming, sanitizeSettings, uniqueHosts,
+  ADAPTIVE_POLICY, isBiliMediaHost, isBiliVideoHost, isMediaUrl, makeRedirectRule, rankResults,
+  replaceMediaHost, resultFromTiming, sanitizeBenchmarkCache, sanitizeSettings,
+  shouldSwitchAfterVerification, uniqueHosts,
 } from "../src/engine.js";
 
 const media = "https://upos-sz-mirroraliov.bilivideo.com/upgcxcode/12/34/video.m4s?deadline=9&token=abc";
@@ -65,8 +66,37 @@ test("会话规则锁定标签页、发起域和源 CDN", () => {
   assert.equal(rule.action.redirect.transform.host, "b.bilivideo.com");
 });
 
-test("设置只保留受支持的模式和刷新间隔", () => {
+test("设置只保留受支持的模式和候选", () => {
   assert.deepEqual(sanitizeSettings({ mode: "bad", refreshMinutes: 999, disabledHosts: ["a.bilivideo.com"] }), {
-    enabled: true, mode: "auto", manualHost: "", disabledHosts: ["a.bilivideo.com"], refreshMinutes: 30,
+    enabled: true, mode: "auto", manualHost: "", disabledHosts: ["a.bilivideo.com"],
   });
+});
+
+test("成功和失败测速使用不同缓存期限", () => {
+  const now = 2_000_000_000_000;
+  const cached = sanitizeBenchmarkCache({
+    winnerHost: "fresh.bilivideo.com",
+    lastFullTestedAt: now - 60_000,
+    lastVerifiedAt: now - 30_000,
+    results: [
+      { host: "fresh.bilivideo.com", ok: true, bytes: 1000, elapsedMs: 10, sampledAt: now - ADAPTIVE_POLICY.successCacheMs + 1 },
+      { host: "stale.bilivideo.com", ok: true, bytes: 1000, elapsedMs: 10, sampledAt: now - ADAPTIVE_POLICY.successCacheMs - 1 },
+      { host: "failed.bilivideo.com", ok: false, elapsedMs: 10, sampledAt: now - ADAPTIVE_POLICY.failureCacheMs + 1 },
+      { host: "old-failure.bilivideo.com", ok: false, elapsedMs: 10, sampledAt: now - ADAPTIVE_POLICY.failureCacheMs - 1 },
+    ],
+  }, now);
+  assert.deepEqual(cached.results.map((item) => item.host), ["fresh.bilivideo.com", "failed.bilivideo.com"]);
+  assert.equal(cached.winnerHost, "fresh.bilivideo.com");
+});
+
+test("轻量复核只在备用节点显著更快时切换", () => {
+  assert.equal(shouldSwitchAfterVerification(
+    { ok: true, kbps: 1000 }, { ok: true, kbps: 1199 },
+  ), false);
+  assert.equal(shouldSwitchAfterVerification(
+    { ok: true, kbps: 1000 }, { ok: true, kbps: 1200 },
+  ), true);
+  assert.equal(shouldSwitchAfterVerification(
+    { ok: false, kbps: 0 }, { ok: true, kbps: 1 },
+  ), true);
 });

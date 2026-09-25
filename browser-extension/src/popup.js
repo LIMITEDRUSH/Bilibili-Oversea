@@ -6,7 +6,7 @@ const elements = Object.fromEntries([
 ].map((id) => [id, document.getElementById(id)]));
 
 let tabId = null;
-let settings = { enabled: true, mode: "auto", manualHost: "", disabledHosts: [], refreshMinutes: 30 };
+let settings = { enabled: true, mode: "auto", manualHost: "", disabledHosts: [] };
 let state = null;
 
 function send(message) {
@@ -15,7 +15,7 @@ function send(message) {
 
 function phaseText(phase) {
   return {
-    waiting: "等待视频", testing: "正在测速", active: "自动模式",
+    waiting: "等待视频", testing: "正在完整测速", verifying: "正在轻量复核", active: "自动模式",
     manual: "固定节点", original: "使用原始 CDN", error: "测速失败",
   }[phase] || "等待视频";
 }
@@ -45,7 +45,7 @@ function renderResults() {
     host.textContent = item.host;
     const metrics = document.createElement("div");
     metrics.className = "metrics";
-    const stage = item.stage === "sustained" ? "复测" : "初筛";
+    const stage = item.stage === "sustained" ? "完整复测" : item.stage === "verify" ? "轻量复核" : "初筛";
     metrics.textContent = item.ok ? `${item.kbps} kbps · 首包 ${item.ttfbMs} ms · ${stage}` : `不可用 · ${item.error || item.status}`;
     info.append(host, metrics);
     const actions = document.createElement("div");
@@ -73,7 +73,7 @@ function renderResults() {
 function render() {
   const phase = state?.phase || "waiting";
   elements.enabled.checked = settings.enabled;
-  elements.refresh.value = String(settings.refreshMinutes);
+  elements.refresh.textContent = "自适应 · 15 分钟轻量复核";
   elements.phase.textContent = phaseText(phase);
   elements.dot.className = `dot ${phase}`;
   elements.selected.textContent = state?.selectedHost || "尚未选择 CDN";
@@ -90,8 +90,13 @@ function render() {
   elements.message.textContent = state?.lastError || (
     phase === "waiting" ? "打开 B 站视频并播放几秒。" : "规则只作用于当前 B 站播放标签页。"
   );
-  elements.testedAt.textContent = state?.lastTestedAt ? `测试于 ${formatTime(state.lastTestedAt)}` : "";
-  const busy = phase === "testing";
+  const timing = [];
+  if (state?.lastTestedAt) timing.push(`完整 ${formatTime(state.lastTestedAt)}`);
+  if (state?.lastVerifiedAt && state.lastVerifiedAt !== state.lastTestedAt) {
+    timing.push(`复核 ${formatTime(state.lastVerifiedAt)}`);
+  }
+  elements.testedAt.textContent = timing.join(" · ");
+  const busy = phase === "testing" || phase === "verifying";
   elements.auto.disabled = busy;
   elements.retest.disabled = busy;
   elements.original.disabled = busy;
@@ -138,8 +143,6 @@ elements.retest.addEventListener("click", async () => {
   state = response?.state || state;
   render();
 });
-elements.refresh.addEventListener("change", () => updateSettings({ refreshMinutes: Number(elements.refresh.value) }));
-
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === "state-updated" && message.tabId === tabId) {
     state = message.state;

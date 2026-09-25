@@ -6,10 +6,12 @@
   const HEALTH_SAMPLE_INTERVAL_MS = 2_000;
   const STALL_CONFIRM_MS = 2_500;
   const STALL_COOLDOWN_MS = 8_000;
-  const STARTUP_GRACE_MS = 20_000;
+  const STARTUP_GRACE_MS = 10_000;
   const SEEK_GRACE_MS = 4_000;
-  const HEALTHY_BUFFER_SECONDS = 8;
-  const LOW_BUFFER_SECONDS = 3;
+  const HEALTHY_BUFFER_SECONDS = 12;
+  const LOW_BUFFER_SECONDS = 8;
+  const MIN_BUFFER_DRAIN_SECONDS = 4;
+  const HEALTH_WINDOW_SAMPLES = 4;
   const MAX_PROBE_BYTES = 1024 * 1024;
   const MAX_PROBE_TIMEOUT_MS = 15_000;
   const discoveredUrls = new Set();
@@ -53,6 +55,15 @@
     };
   }
 
+  function connectionSignature() {
+    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    return [
+      navigator.onLine ? "online" : "offline",
+      String(connection?.type || "unknown"),
+      String(connection?.effectiveType || "unknown"),
+    ].join("|");
+  }
+
   function isMediaHost(host) {
     const value = String(host || "").toLowerCase();
     return /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+bilivideo\.com$/.test(value)
@@ -84,6 +95,7 @@
       urls,
       source,
       observed,
+      pageUrl: location.href,
       connection: connectionHint(),
     });
   }
@@ -158,12 +170,14 @@
 
   async function waitForSafeBuffer(minimumSeconds, maximumWaitMs) {
     const minimum = Math.max(0, Number(minimumSeconds) || 0);
-    if (!minimum || !activeVideo || activeVideo.paused || activeVideo.ended || document.hidden) return;
+    if (!minimum) return true;
+    if (!activeVideo || activeVideo.paused || activeVideo.ended || document.hidden) return false;
     const deadline = Date.now() + Math.max(0, Number(maximumWaitMs) || 0);
     while (Date.now() < deadline && activeVideo && !activeVideo.ended) {
-      if (bufferedAhead(activeVideo) >= minimum) return;
+      if (bufferedAhead(activeVideo) >= minimum) return true;
       await new Promise((resolve) => window.setTimeout(resolve, 500));
     }
+    return false;
   }
 
   async function probeCandidates(message) {
@@ -173,7 +187,9 @@
     const byteLimit = Math.min(MAX_PROBE_BYTES, Math.max(1, Number(message?.byteLimit) || 128 * 1024));
     const timeoutMs = Math.min(MAX_PROBE_TIMEOUT_MS, Math.max(1_000, Number(message?.timeoutMs) || 4_500));
     if (!hosts.length) return { ok: false, error: "no valid probe hosts", results: [] };
-    await waitForSafeBuffer(message?.waitForBufferSeconds, message?.waitTimeoutMs);
+    if (!await waitForSafeBuffer(message?.waitForBufferSeconds, message?.waitTimeoutMs)) {
+      return { ok: false, error: "safe buffer unavailable", results: [] };
+    }
     const results = await Promise.all(hosts.map((host) => probe(sourceUrl, host, byteLimit, timeoutMs)));
     return { ok: true, results };
   }
@@ -192,7 +208,7 @@
   function scheduleStallCheck(video, reason) {
     if (
       video !== activeVideo || document.hidden || video.paused || video.ended || video.seeking
-      || startupProtected() || Date.now() - lastSeekAt < SEEK_GRACE_MS
+      || Date.now() - lastSeekAt < SEEK_GRACE_MS
     ) return;
     window.clearTimeout(stallTimer);
     stallTimer = window.setTimeout(() => {
@@ -225,12 +241,14 @@
       return;
     }
     bufferHistory.push(ahead);
-    if (bufferHistory.length > 4) bufferHistory.shift();
+    if (bufferHistory.length > HEALTH_WINDOW_SAMPLES) bufferHistory.shift();
+    const drain = bufferHistory.length ? bufferHistory[0] - ahead : 0;
     if (
-      bufferHistory.length === 4
+      bufferHistory.length === HEALTH_WINDOW_SAMPLES
       && ahead > 0
       && ahead < LOW_BUFFER_SECONDS
-      && bufferHistory.every((value, index, values) => index === 0 || value < values[index - 1])
+      && drain >= MIN_BUFFER_DRAIN_SECONDS
+      && bufferHistory.every((value, index, values) => index === 0 || value <= values[index - 1] + 0.25)
     ) {
       reportStall("buffer-low");
       bufferHistory.length = 0;
@@ -253,6 +271,7 @@
     videoStartedAt = Date.now();
     healthArmed = false;
     lastSeekAt = 0;
+    lastStallAt = 0;
     bufferHistory.length = 0;
     video.addEventListener("waiting", () => scheduleStallCheck(video, "waiting"));
     video.addEventListener("stalled", () => scheduleStallCheck(video, "stalled"));
@@ -274,6 +293,9 @@
     lastUrl = url;
     discoveredUrls.clear();
     bufferHistory.length = 0;
+    videoStartedAt = Date.now();
+    healthArmed = false;
+    lastStallAt = 0;
     send({ type: "page-changed", url });
   }
 
@@ -302,7 +324,17 @@
     window.postMessage({ source: SOURCE, type: "rescan" }, location.origin);
     scanPerformanceEntries();
     if (activeVideo && !activeVideo.paused && !activeVideo.ended && !document.hidden) {
-      send({ type: "media-heartbeat", connection: connectionHint() });
+      send({
+        type: "media-heartbeat",
+        activity: {
+          visible: !document.hidden,
+          paused: activeVideo.paused,
+          ended: activeVideo.ended,
+          seeking: activeVideo.seeking,
+          bufferedAhead: Number(bufferedAhead(activeVideo).toFixed(3)),
+        },
+        connection: connectionHint(),
+      });
     }
   }
 
@@ -361,6 +393,14 @@
 
   window.setInterval(periodicDiscovery, DISCOVERY_INTERVAL_MS);
   const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-  connection?.addEventListener?.("change", () => send({ type: "network-changed", connection: connectionHint() }));
-  window.addEventListener("online", () => send({ type: "network-changed", connection: connectionHint() }));
+  let lastConnectionSignature = connectionSignature();
+  function reportNetworkChange() {
+    const nextSignature = connectionSignature();
+    if (nextSignature === lastConnectionSignature) return;
+    lastConnectionSignature = nextSignature;
+    send({ type: "network-changed", connection: connectionHint() });
+  }
+  connection?.addEventListener?.("change", reportNetworkChange);
+  window.addEventListener("online", reportNetworkChange);
+  window.addEventListener("offline", reportNetworkChange);
 })();

@@ -1,4 +1,5 @@
 import {
+  ADAPTIVE_POLICY,
   DEFAULT_CANDIDATES,
   DEFAULT_SETTINGS,
   isBiliVideoHost,
@@ -7,11 +8,14 @@ import {
   publicTabState,
   rankResults,
   resultFromTiming,
+  sanitizeBenchmarkCache,
   sanitizeSettings,
+  shouldSwitchAfterVerification,
   uniqueHosts,
 } from "./engine.js";
 
 const SETTINGS_KEY = "biliCdnAutoSettingsV2";
+const BENCHMARK_CACHE_KEY = "biliCdnAutoBenchmarkV3";
 const QUICK_PROBE_BYTES = 128 * 1024;
 const QUICK_PROBE_TIMEOUT_MS = 4_500;
 const SUSTAINED_PROBE_BYTES = 1024 * 1024;
@@ -33,8 +37,11 @@ function newTabState() {
     discoverySource: "",
     lastDetectedAt: 0,
     pageUrl: "",
+    videoKey: "",
+    verifiedVideoKey: "",
     results: [],
     lastTestedAt: 0,
+    lastVerifiedAt: 0,
     lastError: "",
     failedHosts: new Set(),
     runId: 0,
@@ -58,10 +65,41 @@ async function writeSettings(settings) {
   return safe;
 }
 
+async function readBenchmarkCache() {
+  const stored = await chrome.storage.local.get(BENCHMARK_CACHE_KEY);
+  return sanitizeBenchmarkCache(stored[BENCHMARK_CACHE_KEY]);
+}
+
+async function writeBenchmarkCache(value) {
+  const safe = sanitizeBenchmarkCache(value);
+  await chrome.storage.local.set({ [BENCHMARK_CACHE_KEY]: safe });
+  return safe;
+}
+
+function mergeResults(previous, updates) {
+  const merged = new Map((previous || []).map((item) => [item.host, item]));
+  for (const item of updates || []) merged.set(item.host, item);
+  return [...merged.values()];
+}
+
+function stampResults(results, sampledAt = Date.now()) {
+  return (results || []).map((item) => ({ ...item, sampledAt }));
+}
+
+async function persistStateCache(state, winnerHost = state.selectedHost) {
+  return writeBenchmarkCache({
+    winnerHost,
+    results: state.results,
+    lastFullTestedAt: state.lastTestedAt,
+    lastVerifiedAt: state.lastVerifiedAt,
+  });
+}
+
 async function setBadge(tabId, phase) {
   const badges = {
-    testing: ["…", "#f59e0b"], active: ["A", "#00a1d6"], manual: ["M", "#fb7299"],
-    original: ["—", "#64748b"], error: ["!", "#dc2626"], waiting: ["", "#64748b"],
+    testing: ["…", "#f59e0b"], verifying: ["·", "#f59e0b"], active: ["A", "#00a1d6"],
+    manual: ["M", "#fb7299"], original: ["—", "#64748b"], error: ["!", "#dc2626"],
+    waiting: ["", "#64748b"],
   };
   const [text, color] = badges[phase] || badges.waiting;
   await Promise.all([
@@ -72,11 +110,7 @@ async function setBadge(tabId, phase) {
 
 async function publish(tabId) {
   const state = publicTabState(tabStates.get(tabId));
-  chrome.runtime.sendMessage({
-    type: "state-updated",
-    tabId,
-    state,
-  }).catch(() => {});
+  chrome.runtime.sendMessage({ type: "state-updated", tabId, state }).catch(() => {});
   chrome.tabs.sendMessage(tabId, { type: "state-update", state }).catch(() => {});
 }
 
@@ -164,11 +198,16 @@ async function benchmark(tabId, reason = "automatic") {
     state.results = quickResults;
     const quickRanked = rankResults(quickResults, state.originalHost);
     if (!quickRanked.length) {
-      state.lastTestedAt = Date.now();
+      const now = Date.now();
+      state.results = stampResults(quickResults, now);
+      state.lastTestedAt = now;
+      state.lastVerifiedAt = now;
+      state.verifiedVideoKey = state.videoKey;
       state.phase = "error";
       state.lastError = `测速没有可用节点（${reason}）`;
       state.selectedHost = "";
       await clearRule(tabId);
+      await persistStateCache(state, "");
       await setBadge(tabId, "error");
       await publish(tabId);
       return null;
@@ -184,12 +223,21 @@ async function benchmark(tabId, reason = "automatic") {
       waitTimeoutMs: 15_000,
     });
     if (runId !== state.runId) return null;
-    const sustainedByHost = new Map(sustainedResults.map((item) => [item.host, item]));
-    state.results = quickResults.map((item) => sustainedByHost.get(item.host) || item);
-    state.lastTestedAt = Date.now();
+    const sustainedByHost = new Map(sustainedResults
+      .filter((item) => item.ok)
+      .map((item) => [item.host, item]));
+    const now = Date.now();
+    state.results = stampResults(
+      quickResults.map((item) => sustainedByHost.get(item.host) || item),
+      now,
+    );
+    state.lastTestedAt = now;
+    state.lastVerifiedAt = now;
+    state.verifiedVideoKey = state.videoKey;
     state.failedHosts.clear();
     const finalRanked = rankResults(sustainedResults, state.originalHost);
     const winner = finalRanked[0] || quickRanked[0];
+    await persistStateCache(state, winner.host);
     const latestSettings = await readSettings();
     if (!latestSettings.enabled || latestSettings.mode !== "auto") {
       await honorMode(tabId);
@@ -209,6 +257,32 @@ async function benchmark(tabId, reason = "automatic") {
   return testing;
 }
 
+async function hydrateFromCache(tabId, settings) {
+  const state = stateFor(tabId);
+  const disabled = new Set(settings.disabledHosts);
+  const cache = await readBenchmarkCache();
+  const results = cache.results.filter((item) => !disabled.has(item.host));
+  const ranked = rankResults(results, state.originalHost);
+  const winner = ranked.find((item) => item.host === cache.winnerHost) || ranked[0];
+  state.results = results;
+  state.lastTestedAt = cache.lastFullTestedAt;
+  state.lastVerifiedAt = cache.lastVerifiedAt;
+  if (!winner) {
+    const recentFailure = results.some((item) => !item.ok)
+      && Date.now() - cache.lastFullTestedAt < ADAPTIVE_POLICY.failureCacheMs;
+    if (!recentFailure) return false;
+    state.phase = "error";
+    state.lastError = "近期测速均失败，10 分钟后自动重试";
+    await clearRule(tabId);
+    await setBadge(tabId, "error");
+    await publish(tabId);
+    return true;
+  }
+  state.lastError = "";
+  await applyTarget(tabId, winner.host, "active");
+  return true;
+}
+
 async function honorMode(tabId, { forceRetest = false } = {}) {
   const state = stateFor(tabId);
   const settings = await readSettings();
@@ -226,16 +300,41 @@ async function honorMode(tabId, { forceRetest = false } = {}) {
     await applyTarget(tabId, settings.manualHost, "manual");
     return;
   }
-  const staleAfter = settings.refreshMinutes * 60_000;
-  const expired = settings.refreshMinutes > 0 && Date.now() - state.lastTestedAt > staleAfter;
-  if (forceRetest || !state.selectedHost || expired) await benchmark(tabId, forceRetest ? "manual" : "automatic");
-  else if (state.phase !== "active") await applyTarget(tabId, state.selectedHost, "active");
+  if (forceRetest) return benchmark(tabId, "manual");
+  if (!state.selectedHost || !state.results.length) {
+    if (!await hydrateFromCache(tabId, settings)) return benchmark(tabId, "automatic");
+    return;
+  }
+  if (state.phase !== "active" && state.phase !== "verifying" && state.phase !== "testing") {
+    await applyTarget(tabId, state.selectedHost, "active");
+  }
 }
 
-async function rememberMedia(tabId, urls, { source = "page", observed = false } = {}) {
+function pageVideoKey(pageUrl, sourceUrl) {
+  try {
+    const page = new URL(String(pageUrl || ""));
+    page.hash = "";
+    return page.href;
+  } catch {
+    try {
+      const media = new URL(String(sourceUrl || ""));
+      return `${media.hostname}${media.pathname}`;
+    } catch {
+      return "";
+    }
+  }
+}
+
+async function rememberMedia(tabId, urls, { source = "page", observed = false, pageUrl = "" } = {}) {
   const state = stateFor(tabId);
   const valid = [...new Set((urls || []).filter(isMediaUrl))].slice(0, 4);
   if (!valid.length) return;
+  const nextVideoKey = pageVideoKey(pageUrl || state.pageUrl, valid[0]);
+  if (nextVideoKey && nextVideoKey !== state.videoKey) {
+    state.videoKey = nextVideoKey;
+    state.verifiedVideoKey = "";
+  }
+  if (pageUrl) state.pageUrl = String(pageUrl);
   state.sourceUrls = valid;
   for (const value of valid) state.observedHosts.add(new URL(value).hostname.toLowerCase());
   state.originalHost ||= new URL(valid[0]).hostname.toLowerCase();
@@ -254,29 +353,128 @@ async function resetForNavigation(tabId, pageUrl) {
   state.phase = "waiting";
   state.originalHost = "";
   state.actualHost = "";
+  state.selectedHost = "";
+  state.results = [];
+  state.lastTestedAt = 0;
+  state.lastVerifiedAt = 0;
   state.observedHosts.clear();
   state.failedHosts.clear();
   state.discoverySource = "";
   state.lastDetectedAt = 0;
   state.pageUrl = String(pageUrl || "");
+  state.videoKey = pageVideoKey(pageUrl, "");
+  state.verifiedVideoKey = "";
+  await clearRule(tabId);
+  await setBadge(tabId, "waiting");
   await publish(tabId);
 }
 
-async function recoverFromStall(tabId) {
+function markHostFailed(state, host, reason) {
+  const failed = resultFromTiming({
+    host, ok: false, status: 0, bytes: 0, elapsedMs: 1, error: reason, stage: "verify",
+  });
+  failed.sampledAt = Date.now();
+  state.results = mergeResults(state.results, [failed]);
+}
+
+async function recoverFromStall(tabId, reason = "stall") {
   const state = stateFor(tabId);
-  if (!state.selectedHost || !state.results.length) return benchmark(tabId, "stall");
-  state.failedHosts.add(state.selectedHost);
+  if (state.testing) return state.testing;
+  if (!state.selectedHost || !state.results.length) return benchmark(tabId, reason);
+  const failedHost = state.selectedHost;
+  state.failedHosts.add(failedHost);
+  markHostFailed(state, failedHost, `playback ${reason}`);
   const disabled = new Set((await readSettings()).disabledHosts);
   const next = rankResults(state.results, state.originalHost)
     .find((item) => !state.failedHosts.has(item.host) && !disabled.has(item.host));
   if (next) {
     await applyTarget(tabId, next.host, "active");
+    await persistStateCache(state, next.host);
     chrome.tabs.sendMessage(tabId, { type: "retry-playback", reason: "stall-recovery" }).catch(() => {});
     return next;
   }
-  state.lastTestedAt = 0;
   state.failedHosts.clear();
   return benchmark(tabId, "stall-exhausted");
+}
+
+async function lightVerify(tabId, reason = "periodic") {
+  const state = stateFor(tabId);
+  if (state.testing) return state.testing;
+  const sourceUrl = state.sourceUrls.find(isMediaUrl);
+  if (!sourceUrl || !state.selectedHost) return null;
+  const settings = await readSettings();
+  if (!settings.enabled || settings.mode !== "auto") return null;
+  const disabled = new Set(settings.disabledHosts);
+  const ranked = rankResults(state.results, state.originalHost)
+    .filter((item) => !disabled.has(item.host) && !state.failedHosts.has(item.host));
+  const backup = ranked.find((item) => item.host !== state.selectedHost);
+  if (!backup) return benchmark(tabId, "verify-no-backup");
+  const hosts = uniqueHosts([state.selectedHost, backup.host], 2);
+  const operation = (async () => {
+    state.phase = "verifying";
+    state.lastError = "";
+    await setBadge(tabId, "verifying");
+    await publish(tabId);
+    const now = Date.now();
+    const verified = stampResults(await probeCandidates(tabId, sourceUrl, hosts, {
+      byteLimit: ADAPTIVE_POLICY.lightProbeBytes,
+      timeoutMs: ADAPTIVE_POLICY.lightProbeTimeoutMs,
+      stage: "verify",
+      waitForBufferSeconds: ADAPTIVE_POLICY.safeBufferSeconds,
+      waitTimeoutMs: 4_000,
+    }), now);
+    state.results = mergeResults(state.results, verified);
+    state.lastVerifiedAt = now;
+    state.verifiedVideoKey = state.videoKey;
+    const byHost = new Map(verified.map((item) => [item.host, item]));
+    const current = byHost.get(state.selectedHost);
+    const alternative = byHost.get(backup.host);
+    const shouldSwitch = shouldSwitchAfterVerification(current, alternative);
+    const needsFull = !current?.ok || shouldSwitch;
+    if (shouldSwitch) await applyTarget(tabId, alternative.host, "active");
+    else {
+      state.phase = "active";
+      await setBadge(tabId, "active");
+      await publish(tabId);
+    }
+    await persistStateCache(state, state.selectedHost);
+    return { needsFull, reason };
+  })();
+  state.testing = operation;
+  let outcome;
+  try {
+    outcome = await operation;
+  } finally {
+    if (state.testing === operation) state.testing = null;
+  }
+  if (outcome?.needsFull) return benchmark(tabId, `verify-${reason}`);
+  return outcome;
+}
+
+function activityAllowsProbe(activity) {
+  return activity?.visible === true
+    && activity.paused === false
+    && activity.ended === false
+    && activity.seeking === false
+    && Number(activity.bufferedAhead) >= ADAPTIVE_POLICY.safeBufferSeconds;
+}
+
+async function maybeAdaptiveMaintenance(tabId, activity) {
+  const state = stateFor(tabId);
+  if (state.testing || !state.sourceUrls.length || !state.selectedHost || !activityAllowsProbe(activity)) return;
+  const settings = await readSettings();
+  if (!settings.enabled || settings.mode !== "auto") return;
+  const now = Date.now();
+  if (!state.lastTestedAt || now - state.lastTestedAt >= ADAPTIVE_POLICY.successCacheMs) {
+    await benchmark(tabId, "cache-expired");
+    return;
+  }
+  const newVideoNeedsVerification = Boolean(state.videoKey && state.verifiedVideoKey !== state.videoKey);
+  const periodicVerificationDue = !state.lastVerifiedAt
+    || now - state.lastVerifiedAt >= ADAPTIVE_POLICY.lightVerifyIntervalMs;
+  if (newVideoNeedsVerification || periodicVerificationDue) {
+    await lightVerify(tabId, newVideoNeedsVerification ? "new-video" : "periodic");
+  }
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -286,12 +484,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       await rememberMedia(senderTabId, message.urls, {
         source: message.source,
         observed: message.observed === true,
+        pageUrl: message.pageUrl,
       });
       return { ok: true };
     }
     if (message?.type === "media-heartbeat" && Number.isInteger(senderTabId)) {
       const state = stateFor(senderTabId);
-      if (state.sourceUrls.length) await honorMode(senderTabId);
+      if (state.sourceUrls.length) {
+        await honorMode(senderTabId);
+        await maybeAdaptiveMaintenance(senderTabId, message.activity);
+      }
       return { ok: true };
     }
     if (message?.type === "page-changed" && Number.isInteger(senderTabId)) {
@@ -299,16 +501,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return { ok: true };
     }
     if (message?.type === "playback-stall" && Number.isInteger(senderTabId)) {
-      await recoverFromStall(senderTabId);
+      await recoverFromStall(senderTabId, message.reason || "stall");
       return { ok: true };
     }
     if (message?.type === "network-changed" && Number.isInteger(senderTabId)) {
       const state = stateFor(senderTabId);
       state.lastTestedAt = 0;
+      state.lastVerifiedAt = 0;
       state.selectedHost = "";
       state.failedHosts.clear();
       await clearRule(senderTabId);
-      await honorMode(senderTabId, { forceRetest: Boolean(state.sourceUrls.length) });
+      if (state.sourceUrls.length) await benchmark(senderTabId, "network-change");
       return { ok: true };
     }
     const tabId = Number(message?.tabId);
@@ -327,10 +530,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type === "retest" && Number.isInteger(tabId)) {
       const state = stateFor(tabId);
       state.lastTestedAt = 0;
+      state.lastVerifiedAt = 0;
       state.selectedHost = "";
       state.failedHosts.clear();
       await clearRule(tabId);
-      await honorMode(tabId, { forceRetest: true });
+      await benchmark(tabId, "manual");
       return { ok: true, state: publicTabState(state) };
     }
     return { ok: false };
