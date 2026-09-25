@@ -8,7 +8,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const html = fs.readFileSync(path.join(root, "src/popup.html"), "utf8");
 
 test("弹窗提供自动、重测、原始 CDN 和教程入口", () => {
-  for (const id of ["auto", "retest", "original", "results", "refresh"]) {
+  for (const id of ["auto", "retest", "original", "results", "refresh", "actual", "applyState"]) {
     assert.match(html, new RegExp(`id=["']${id}["']`));
   }
   assert.match(html, /browser-guide\.html/);

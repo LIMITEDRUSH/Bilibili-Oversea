@@ -11,10 +11,14 @@ const source = fs.readFileSync(path.join(root, "src/content.js"), "utf8");
 test("媒体测速在页面内容上下文中保留正常 Referer 策略", async () => {
   let messageListener;
   const requests = [];
+  const intervals = [];
+  const dataset = {};
+  const sentMessages = [];
+  let resourceEntries = [];
   const window = {
     addEventListener() {},
     postMessage() {},
-    setInterval,
+    setInterval(callback, delay) { intervals.push({ callback, delay }); return intervals.length; },
     setTimeout,
     clearTimeout,
   };
@@ -23,13 +27,14 @@ test("媒体测速在页面内容上下文中保留正常 Referer 策略", async
     Array,
     chrome: {
       runtime: {
+        getManifest() { return { version: "2.1.0" }; },
         onMessage: { addListener(listener) { messageListener = listener; } },
-        sendMessage: async () => {},
+        sendMessage: async (message) => { sentMessages.push(message); },
       },
     },
     document: {
       addEventListener() {},
-      documentElement: {},
+      documentElement: { dataset },
       hidden: false,
       querySelector() { return null; },
     },
@@ -41,7 +46,10 @@ test("媒体测速在页面内容上下文中保留正常 Referer 策略", async
     MutationObserver: class { observe() {} },
     navigator: { onLine: true },
     Object,
-    performance,
+    performance: {
+      now: () => performance.now(),
+      getEntriesByType: () => resourceEntries,
+    },
     Promise,
     Response,
     Set,
@@ -69,4 +77,16 @@ test("媒体测速在页面内容上下文中保留正常 Referer 策略", async
   assert.equal(new URL(requests[0].url).hostname, "upos-sz-mirrorcosov.bilivideo.com");
   assert.equal(requests[0].options.headers.Range, "bytes=0-1023");
   assert.equal(Object.hasOwn(requests[0].options, "referrerPolicy"), false);
+  assert.ok(intervals.some((item) => item.delay === 10_000));
+  assert.equal(dataset.biliCdnAutoVersion, "2.1.0");
+
+  const probeResource = requests[0].url;
+  resourceEntries = [{ name: probeResource, startTime: 1, duration: 1, initiatorType: "fetch" }];
+  intervals.find((item) => item.delay === 10_000).callback();
+  assert.equal(sentMessages.some((message) => message.observed === true), false);
+  resourceEntries = [...resourceEntries, {
+    name: probeResource, startTime: 2, duration: 2, initiatorType: "xmlhttprequest",
+  }];
+  intervals.find((item) => item.delay === 10_000).callback();
+  assert.equal(sentMessages.some((message) => message.observed === true), true);
 });

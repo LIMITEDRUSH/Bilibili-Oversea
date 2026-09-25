@@ -15,6 +15,7 @@ test("页面桥接只发出 bilivideo 媒体地址", () => {
   const window = {
     __playinfo__: { data: { dash: { video: [{ baseUrl: "https://a.bilivideo.com/upgcxcode/a.m4s?token=1" }] } } },
     fetch: async () => ({ clone: () => ({ json: async () => ({}) }) }),
+    history: { pushState() {}, replaceState() {} },
     postMessage: (value) => messages.push(value),
     addEventListener() {},
   };
@@ -25,6 +26,8 @@ test("页面桥接只发出 bilivideo 媒体地址", () => {
   }));
   assert.equal(messages.length, 1);
   assert.deepEqual([...messages[0].urls], ["https://a.bilivideo.com/upgcxcode/a.m4s?token=1"]);
+  window.history.pushState({}, "", "/video/BV2");
+  assert.ok(messages.some((message) => message.type === "page-changed"));
   assert.equal(source.includes("eval("), false);
   assert.equal(source.includes("chrome."), false);
 });

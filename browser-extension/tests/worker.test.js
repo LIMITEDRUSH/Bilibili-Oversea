@@ -57,12 +57,17 @@ test("后台收到媒体地址后测速并建立当前标签页规则", async ()
       assert.equal(keepAlive, true);
     });
     assert.equal(response.ok, true);
-    assert.equal(probeMessages.length, 1);
+    assert.equal(probeMessages.length, 2);
     assert.equal(probeMessages[0].sourceUrl, "https://origin.bilivideo.com/upgcxcode/a/video.m4s?token=1");
+    assert.equal(probeMessages[0].byteLimit, 128 * 1024);
+    assert.equal(probeMessages[1].byteLimit, 1024 * 1024);
+    assert.equal(probeMessages[1].waitForBufferSeconds, 10);
     const state = await new Promise((resolve) => {
       messageListener({ type: "get-state", tabId: 42 }, {}, resolve);
     });
     assert.equal(state.state.results[0].error, "");
+    assert.equal(state.state.results[0].stage, "sustained");
+    assert.equal(state.state.ruleInstalled, true);
     const applied = ruleUpdates.find((update) => update.addRules?.length);
     assert.ok(applied);
     assert.deepEqual(applied.addRules[0].condition.tabIds, [42]);

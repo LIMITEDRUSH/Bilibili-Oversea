@@ -1,7 +1,7 @@
 "use strict";
 
 const elements = Object.fromEntries([
-  "enabled", "dot", "phase", "selected", "message", "auto", "retest", "original",
+  "enabled", "dot", "phase", "selected", "actual", "applyState", "message", "auto", "retest", "original",
   "results", "testedAt", "refresh",
 ].map((id) => [id, document.getElementById(id)]));
 
@@ -45,15 +45,18 @@ function renderResults() {
     host.textContent = item.host;
     const metrics = document.createElement("div");
     metrics.className = "metrics";
-    metrics.textContent = item.ok ? `${item.kbps} kbps · 首包 ${item.ttfbMs} ms` : `不可用 · ${item.error || item.status}`;
+    const stage = item.stage === "sustained" ? "复测" : "初筛";
+    metrics.textContent = item.ok ? `${item.kbps} kbps · 首包 ${item.ttfbMs} ms · ${stage}` : `不可用 · ${item.error || item.status}`;
     info.append(host, metrics);
     const actions = document.createElement("div");
     actions.className = "actions";
     if (item.ok) {
       const use = document.createElement("button");
       use.type = "button";
-      use.textContent = "固定";
-      use.addEventListener("click", () => updateSettings({ mode: "manual", manualHost: item.host }));
+      const isFixed = settings.mode === "manual" && settings.manualHost === item.host;
+      use.textContent = isFixed ? "已固定" : "固定";
+      use.disabled = isFixed;
+      use.addEventListener("click", () => updateSettings({ mode: "manual", manualHost: item.host }, false, true));
       actions.append(use);
     }
     const disable = document.createElement("button");
@@ -74,6 +77,16 @@ function render() {
   elements.phase.textContent = phaseText(phase);
   elements.dot.className = `dot ${phase}`;
   elements.selected.textContent = state?.selectedHost || "尚未选择 CDN";
+  elements.actual.textContent = `最近媒体请求：${state?.actualHost || "尚未观察"}`;
+  elements.applyState.textContent = !state?.selectedHost
+    ? "等待规则"
+    : state.actualHost === state.selectedHost
+      ? "已观察到目标请求"
+      : state.ruleInstalled
+        ? "规则已安装"
+        : state.selectedHost === state.originalHost
+          ? "当前已是目标节点"
+          : "等待后续请求";
   elements.message.textContent = state?.lastError || (
     phase === "waiting" ? "打开 B 站视频并播放几秒。" : "规则只作用于当前 B 站播放标签页。"
   );
@@ -93,10 +106,10 @@ async function loadState(retry = true) {
   if (!state && retry) setTimeout(() => loadState(false).catch(() => {}), 500);
 }
 
-async function updateSettings(patch, forceRetest = false) {
+async function updateSettings(patch, forceRetest = false, applyNow = false) {
   settings = { ...settings, ...patch };
   render();
-  const response = await send({ type: "set-settings", settings, forceRetest });
+  const response = await send({ type: "set-settings", settings, forceRetest, applyNow });
   settings = response?.settings || settings;
   state = response?.state || state;
   render();
@@ -104,14 +117,20 @@ async function updateSettings(patch, forceRetest = false) {
 
 async function toggleHost(host) {
   const disabled = new Set(settings.disabledHosts);
-  if (disabled.has(host)) disabled.delete(host);
-  else disabled.add(host);
-  await updateSettings({ disabledHosts: [...disabled] }, host === state?.selectedHost);
+  const disabling = !disabled.has(host);
+  if (disabling) disabled.add(host);
+  else disabled.delete(host);
+  const patch = { disabledHosts: [...disabled] };
+  if (disabling && settings.mode === "manual" && settings.manualHost === host) {
+    patch.mode = "auto";
+    patch.manualHost = "";
+  }
+  await updateSettings(patch, disabling && host === state?.selectedHost);
 }
 
 elements.enabled.addEventListener("change", () => updateSettings({ enabled: elements.enabled.checked }));
 elements.auto.addEventListener("click", () => updateSettings({ enabled: true, mode: "auto", manualHost: "" }, true));
-elements.original.addEventListener("click", () => updateSettings({ mode: "original", manualHost: "" }));
+elements.original.addEventListener("click", () => updateSettings({ mode: "original", manualHost: "" }, false, true));
 elements.retest.addEventListener("click", async () => {
   state = { ...state, phase: "testing" };
   render();

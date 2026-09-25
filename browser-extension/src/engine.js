@@ -89,7 +89,9 @@ export function sanitizeSettings(input = {}) {
   };
 }
 
-export function resultFromTiming({ host, ok, status = 0, bytes = 0, elapsedMs = 0, ttfbMs = 0, error = "" }) {
+export function resultFromTiming({
+  host, ok, status = 0, bytes = 0, elapsedMs = 0, ttfbMs = 0, error = "", stage = "quick",
+}) {
   const safeMs = Math.max(1, Number(elapsedMs) || 0);
   const safeBytes = Math.max(0, Number(bytes) || 0);
   return {
@@ -101,6 +103,7 @@ export function resultFromTiming({ host, ok, status = 0, bytes = 0, elapsedMs = 
     ttfbMs: Math.round(Math.max(0, Number(ttfbMs) || 0)),
     kbps: Math.round((safeBytes * 8) / safeMs),
     error: String(error || "").slice(0, 120),
+    stage: stage === "sustained" ? "sustained" : "quick",
   };
 }
 
@@ -146,6 +149,10 @@ export function publicTabState(state) {
     phase: state.phase || "idle",
     selectedHost: state.selectedHost || "",
     originalHost: state.originalHost || "",
+    actualHost: state.actualHost || "",
+    ruleInstalled: state.ruleInstalled === true,
+    discoverySource: state.discoverySource || "",
+    lastDetectedAt: Number(state.lastDetectedAt) || 0,
     results: Array.isArray(state.results) ? state.results.slice(0, 12) : [],
     lastTestedAt: Number(state.lastTestedAt) || 0,
     lastError: String(state.lastError || ""),

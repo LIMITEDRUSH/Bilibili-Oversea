@@ -42,9 +42,9 @@
     return output;
   }
 
-  function announce(payload) {
+  function announce(payload, reason = "playurl") {
     const urls = collectMediaUrls(payload);
-    if (urls.length) window.postMessage({ source: SOURCE, type: "media-urls", urls }, location.origin);
+    if (urls.length) window.postMessage({ source: SOURCE, type: "media-urls", reason, urls }, location.origin);
   }
 
   function looksLikePlayurl(value) {
@@ -60,7 +60,7 @@
     window.fetch = async function biliCdnAutoFetch(input, init) {
       const response = await nativeFetch.call(this, input, init);
       const requestUrl = typeof input === "string" || input instanceof URL ? input : input?.url;
-      if (looksLikePlayurl(requestUrl)) response.clone().json().then(announce).catch(() => {});
+      if (looksLikePlayurl(requestUrl)) response.clone().json().then((value) => announce(value, "fetch")).catch(() => {});
       return response;
     };
   }
@@ -70,7 +70,7 @@
     if (looksLikePlayurl(url)) {
       this.addEventListener("load", () => {
         try {
-          announce(this.responseType === "json" ? this.response : JSON.parse(this.responseText));
+          announce(this.responseType === "json" ? this.response : JSON.parse(this.responseText), "xhr");
         } catch {}
       }, { once: true });
     }
@@ -79,8 +79,19 @@
 
   window.addEventListener("message", (event) => {
     if (event.source === window && event.data?.source === SOURCE && event.data?.type === "rescan") {
-      announce(window.__playinfo__);
+      announce(window.__playinfo__, "rescan");
     }
   });
-  queueMicrotask(() => announce(window.__playinfo__));
+
+  for (const method of ["pushState", "replaceState"]) {
+    const native = window.history?.[method];
+    if (typeof native !== "function") continue;
+    window.history[method] = function biliCdnAutoHistory(...args) {
+      const result = native.apply(this, args);
+      window.postMessage({ source: SOURCE, type: "page-changed", url: location.href }, location.origin);
+      return result;
+    };
+  }
+
+  queueMicrotask(() => announce(window.__playinfo__, "initial"));
 })();

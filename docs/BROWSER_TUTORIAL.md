@@ -1,13 +1,13 @@
 # Chrome / Edge 浏览器插件完整教程
 
-Bilibili-oversea 2.0 是本项目独立实现的 Manifest V3 扩展。它只在 B 站播放页观察媒体地址，在本机对候选
+Bilibili-oversea 2.1 是本项目独立实现的 Manifest V3 扩展。它只在 B 站播放页观察媒体地址，在本机对候选
 `bilivideo.com` CDN 做小流量 Range 测速，并为当前播放标签页建立临时重定向规则。
 
 ## 1. 下载
 
 打开安装页：<https://limitedrush.github.io/Bilibili-Oversea/>
 
-点击“下载 Chrome / Edge 扩展”，得到 `bilibili-oversea-browser-v2.0.2.zip`。
+点击“下载 Chrome / Edge 扩展”，得到 `bilibili-oversea-browser-v2.1.0.zip`。
 
 浏览器不能直接加载 ZIP。先在文件管理器中把它完整解压到一个不会随手删除的目录，例如
 `Documents/BiliCDNAuto`。打开该目录后应直接看到 `manifest.json`、`src` 和 `assets`。
@@ -18,7 +18,7 @@ Bilibili-oversea 2.0 是本项目独立实现的 Manifest V3 扩展。它只在 
 2. 打开页面右上角的“开发者模式”。
 3. 点击“加载已解压的扩展程序”。
 4. 选择刚才解压且直接包含 `manifest.json` 的目录。
-5. 列表中出现 `Bilibili-oversea 2.0.2` 和青色全球加速图标，即安装成功。
+5. 列表中出现 `Bilibili-oversea 2.1.0` 和青色全球加速图标，即安装成功。
 
 ## 3. 安装到 Edge
 
@@ -39,7 +39,7 @@ Bilibili-oversea 2.0 是本项目独立实现的 Manifest V3 扩展。它只在 
 
 1. 打开 <https://www.bilibili.com> 的普通视频、番剧或课程播放页。
 2. 如果安装扩展之前已经打开了页面，先刷新一次。
-3. 开始播放视频，等待 3–8 秒。
+3. 开始播放视频；插件会立即监听播放接口，并每 10 秒做一次不下载媒体数据的兜底扫描。
 4. 点击工具栏中的 Bilibili-oversea 图标。
 5. 状态先显示“正在测速”，完成后显示选中的 CDN 和各节点结果。
 
@@ -50,7 +50,7 @@ Bilibili-oversea 2.0 是本项目独立实现的 Manifest V3 扩展。它只在 
 - **自动优选**：清除手动固定并立即重新测速。
 - **重新测速**：保留自动模式，使用当前视频的新签名 URL 再测一次。
 - **原始 CDN**：删除当前标签页的切换规则，使用 B 站原本分配的节点。
-- **固定**：在测速结果中固定使用某个可用节点。
+- **固定**：在测速结果中固定使用某个可用节点，并轻微回退播放位置以让后续请求立即采用新规则。
 - **禁用**：后续测速跳过该候选；再次点击可恢复。
 - **自动重测**：设置自动结果的刷新间隔。默认 30 分钟。
 - **总开关**：关闭后移除切换规则，但保留本地设置。
@@ -61,7 +61,7 @@ Bilibili-oversea 2.0 是本项目独立实现的 Manifest V3 扩展。它只在 
 
 正常表现：
 
-1. 弹窗出现真实的 `*.bilivideo.com` 节点；
+1. 弹窗出现切换目标和最近观察到的媒体请求节点；
 2. 至少一个结果显示 kbps 和首包时间；
 3. 状态为“自动模式”或“固定节点”；
 4. 播放发生持续低缓冲或 `waiting/stalled` 后，插件会尝试下一个已验证节点。
@@ -113,7 +113,7 @@ Bilibili-oversea 2.0 是本项目独立实现的 Manifest V3 扩展。它只在 
 - 不读取 Cookie、浏览历史或其他网站；
 - 不使用浏览器代理权限；
 - 完整媒体 URL 只保存在后台内存；
-- 每轮最多测试 8 个候选，每个最多读取 128 KB，理论上限约 1 MB；
+- 每轮最多对 8 个候选各读取 128 KB 初筛，再对前三名各读取最多 1 MB 复测，理论上限约 4 MB；
 - 权限范围只覆盖明确的 B 站播放页面、`*.bilivideo.com` 和 `*.mcdn.bilivideo.cn` 媒体域名。
 
 源码架构见 [`browser-extension/ARCHITECTURE.md`](../browser-extension/ARCHITECTURE.md)。
