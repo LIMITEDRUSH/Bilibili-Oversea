@@ -66,8 +66,9 @@ test("benchmarks once then reuses the cached winner", async () => {
   const client = {
     get(options, callback) {
       probes += 1;
-      const delay = options.url.includes("fast.bilivideo.com") ? 1 : 8;
-      setTimeout(() => callback(null, { status: 206 }, new Uint8Array(4096)), delay);
+      const finish = () => callback(null, { status: 206 }, new Uint8Array(4096));
+      if (options.url.includes("fast.bilivideo.com")) finish();
+      else setTimeout(finish, 20);
     },
   };
   const request = {
