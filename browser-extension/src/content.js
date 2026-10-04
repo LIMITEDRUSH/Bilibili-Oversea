@@ -36,6 +36,78 @@
   let recoveryVideo = null;
   let lastUrl = location.href;
 
+  // Read-only popup telemetry. No timer, network request, or routing message.
+  const displayVideos = new WeakMap();
+  let displayPage = location.href;
+  let displayPreviousVideo = null;
+  let displayPreviousSource = "";
+  let displayNavigationPending = false;
+
+  function displayVideo() {
+    const videos = [...(document.querySelectorAll?.("video") || [])];
+    return videos.sort((a, b) => {
+      const score = video => {
+        const rect = video.getBoundingClientRect?.() || {};
+        const main = video.closest?.("#bilibili-player, #bilibiliPlayer, .bpx-player-container, .bilibili-player, .bilibili-player-video, .player-container");
+        return (main ? 1e9 : 0) + Math.max(0, rect.width || 0) * Math.max(0, rect.height || 0);
+      };
+      return score(b) - score(a);
+    })[0] || null;
+  }
+
+  function readPlaybackInfo() {
+    const video = displayVideo();
+    const source = String(video?.currentSrc || video?.src || "");
+    if (displayPage !== location.href) {
+      displayPage = location.href;
+      displayNavigationPending = Boolean(video && video === displayPreviousVideo && source === displayPreviousSource
+        && displayVideos.get(video)?.page !== displayPage);
+      const old = video && displayVideos.get(video);
+      if (old && displayNavigationPending) { old.status = "loading"; old.lastTime = Number(video.currentTime) || 0; }
+    }
+    const heading = document.querySelector("h1.video-title, .video-info-title, h1.media-title, .mediainfo_mediaTitle__yejlB");
+    const title = String(heading?.getAttribute?.("title") || heading?.textContent || document.title || "")
+      .replace(/[_\s-]*(?:哔哩哔哩|bilibili)(?:_.*)?$/i, "").trim().slice(0, 240);
+    const candidateHosts = [...new Set([...discoveredUrls, ...observedResourceUrls, ...observedResponseUrls]
+      .filter(isMediaUrl).map(url => new URL(url).hostname))].slice(0, 12);
+    const result = { sampledAt: Date.now(), hasVideo: Boolean(video), title, status: "empty", candidateHosts };
+    if (!video) { displayPreviousVideo = null; displayPreviousSource = ""; return result; }
+    let display = displayVideos.get(video);
+    if (!display) {
+      display = { status: "loading", lastTime: Number(video.currentTime) || 0, page: displayPage };
+      displayVideos.set(video, display);
+      for (const name of ["playing", "waiting", "stalled", "pause", "ended", "seeking", "error", "loadstart", "emptied", "loadedmetadata", "timeupdate"]) {
+        video.addEventListener(name, () => {
+          // Ignore detached display sessions after a navigation.
+          if (displayVideos.get(video) !== display) return;
+          if (name === "loadedmetadata" || name === "loadstart" || name === "emptied") {
+            displayNavigationPending = false;
+            display.page = location.href;
+            display.status = "loading";
+          } else if (name === "playing") display.status = "playing";
+          else if (name === "waiting" || name === "stalled") display.status = "buffering";
+          else if (name === "timeupdate") {
+            if (Number(video.currentTime) > display.lastTime && !video.paused && !video.seeking) display.status = "playing";
+          } else display.status = name === "pause" ? "paused" : name;
+        });
+      }
+    }
+    if (displayNavigationPending && (video !== displayPreviousVideo || source !== displayPreviousSource)) displayNavigationPending = false;
+    if (displayNavigationPending) return { ...result, hasVideo: false, status: "loading", title: "正在加载视频" };
+    const currentTime = Number(video.currentTime);
+    const moving = Number.isFinite(currentTime) && currentTime > display.lastTime && currentTime - display.lastTime < 5;
+    const status = video.error ? "error" : video.ended ? "ended" : video.seeking ? "seeking"
+      : video.paused ? "paused" : Number(video.readyState) < 3 ? "buffering"
+      : moving ? "playing" : display.status;
+    display.lastTime = currentTime;
+    display.status = status;
+    displayPreviousVideo = video;
+    displayPreviousSource = source;
+    return { ...result, status, currentTime, duration: Number.isFinite(video.duration) ? video.duration : null,
+      width: Number(video.videoWidth) || 0, height: Number(video.videoHeight) || 0,
+      bufferedAhead: Number(bufferedAhead(video).toFixed(3)) };
+  }
+
   function writeDiagnostics(state = null) {
     const root = document.documentElement;
     if (!root?.dataset) return;
@@ -379,6 +451,10 @@
   });
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === "get-playback-info") {
+      sendResponse({ ok: true, playback: readPlaybackInfo() });
+      return false;
+    }
     if (message?.type === "cancel-probes") {
       cancelProbes();
       sendResponse({ ok: true });

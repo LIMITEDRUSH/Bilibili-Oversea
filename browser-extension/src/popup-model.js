@@ -1,4 +1,4 @@
-import { isBiliMediaHost } from "./engine.js";
+import { DEFAULT_CANDIDATES, isBiliMediaHost, uniqueHosts } from "./engine.js";
 
 const hostNames = [
   ["mirrorali", "阿里云"], ["mirrorcos", "腾讯云"], ["mirrorhw", "华为云"],
@@ -18,14 +18,24 @@ export function speedLabel(kbps) {
   return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 1 }).format(value) + " Mbps";
 }
 
-export function popupRows(settings, state) {
+export function popupRows(settings, state, { candidateHosts = [] } = {}) {
   const rows = new Map((state?.results || []).map(item => [item.host, { ...item }]));
+  const observed = uniqueHosts([state?.originalHost, state?.actualHost, ...candidateHosts], 12);
+  // Discovery and measurements are different: never hide a real candidate
+  // merely because no result exists yet, or after native passthrough clears it.
+  if (state?.lastDetectedAt || observed.length || rows.size) {
+    for (const host of uniqueHosts([state?.originalHost, ...DEFAULT_CANDIDATES, ...observed], 12)) {
+      if (!rows.has(host)) rows.set(host, { host, ok: false, untested: true, kbps: 0,
+        observed: observed.includes(host), preset: DEFAULT_CANDIDATES.includes(host) });
+    }
+  }
   for (const host of settings.disabledHosts || []) {
     if (!rows.has(host)) rows.set(host, { host, ok: false, untested: true, kbps: 0 });
   }
   const disabled = new Set(settings.disabledHosts || []);
   return [...rows.values()].sort((a, b) => Number(disabled.has(a.host)) - Number(disabled.has(b.host))
-    || Number(b.ok) - Number(a.ok) || (Number(b.kbps) || 0) - (Number(a.kbps) || 0));
+    || Number(b.ok) - Number(a.ok) || Number(a.untested === true) - Number(b.untested === true)
+    || (Number(b.kbps) || 0) - (Number(a.kbps) || 0));
 }
 
 export function diagnostics(settings, state, version) {

@@ -1,10 +1,10 @@
 # Bili CDN Auto
 
-**安装入口：<https://limitedrush.github.io/Bilibili-Oversea/>**
+**安装入口：<https://limitedrush.online/projects/bilibili-oversea>**
 
-**iOS 完整教程：<https://limitedrush.github.io/Bilibili-Oversea/guide.html>**
+**iOS 完整教程：<https://limitedrush.online/projects/bilibili-oversea#ios-guide>**
 
-**浏览器插件教程：<https://limitedrush.github.io/Bilibili-Oversea/browser-guide.html>**
+**浏览器插件教程：<https://limitedrush.online/projects/bilibili-oversea#browser-guide>**
 
 浏览器版可直接从安装入口下载；iPhone/iPad 在同一页面选择 Surge、Loon、Shadowrocket 或 Stash
 一键导入，并可安装“连接 VPN”快捷指令。
@@ -19,7 +19,7 @@
 
 ### Chrome / Edge
 
-浏览器插件名称为 **Bilibili-oversea**。使用 `browser-extension/dist/bilibili-oversea-browser-v2.3.2.zip`，解压后打开
+浏览器插件名称为 **Bilibili-oversea**。使用 `browser-extension/dist/bilibili-oversea-browser-v2.3.3.zip`，解压后打开
 `chrome://extensions` 或 `edge://extensions`，开启开发者模式并选择“加载已解压的扩展程序”。
 自动模式首次安装即启用，打开 B 站视频播放几秒即可。完整步骤见
 [`docs/BROWSER_TUTORIAL.md`](docs/BROWSER_TUTORIAL.md)。

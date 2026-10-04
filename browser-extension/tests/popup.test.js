@@ -29,13 +29,23 @@ test("撤销失败时即使总开关已关闭也不显示成功暂停或原始�
   assert.equal(view.applied, "规则仍可能生效");
 });
 
-test("弹窗提供自动、重测、原始 CDN、自适应维护和教程入口", () => {
-  for (const id of ["auto", "retest", "original", "results", "refresh", "actual", "applyState"]) {
+test("弹窗突出真实播放信息，删除常驻解释，所有外跳进入个人站", () => {
+  for (const id of ["auto", "retest", "original", "results", "actual", "applyState", "playbackStatus", "videoTitle", "resolution", "buffer", "progress"]) {
     assert.match(html, new RegExp(`id=["']${id}["']`));
   }
-  assert.match(html, /browser-guide\.html/);
-  assert.match(html, /自适应 · 15 分钟/);
+  const links = [...html.matchAll(/<a\b[^>]*href="([^"]+)"/g)].map(match => match[1]);
+  assert.equal(links.length, 1);
+  assert.ok(links.every(link => link.startsWith("https://limitedrush.online/")));
+  assert.doesNotMatch(html, /自适应 · 15 分钟|PLAYBACK ROUTER|推荐|route-signal|maintenance|modeDescription/);
   assert.doesNotMatch(html, /on(?:click|change)=/i);
+});
+
+test("呼吸灯只依赖真实播放状态，并支持减少动态效果", () => {
+  assert.match(css, /\[data-playback="playing"\] \.dot[^}]*animation: breathe/);
+  assert.doesNotMatch(css, /\.dot\.active|\.dot\.manual/);
+  assert.match(css, /prefers-reduced-motion: reduce/);
+  assert.match(html, /id="message"[^>]*hidden/);
+  assert.match(css, /\[hidden\][^}]*display: none !important/);
 });
 
 test("暂停和非播放页不会误报优化正在工作", () => {
@@ -80,7 +90,33 @@ test("已排除节点在重测或后台重启后仍有恢复入口，不伪造�
     { host: rows[0].host, ok: true, kbps: 100 }, { host: "other.bilivideo.com", ok: true, kbps: 50 },
   ] });
   assert.equal(ranked[0].host, "other.bilivideo.com");
-  assert.equal(ranked[1].kbps, 100);
+  assert.equal(ranked.find(item => item.host === rows[0].host).kbps, 100);
+  assert.equal(ranked.at(-1).host, rows[0].host);
+});
+
+test("重测和没有结果时保留真实候选，发现但未测的节点也可见", () => {
+  for (const phase of ["waiting", "testing", "active", "error"]) {
+    const rows = popupRows({ disabledHosts: [] }, { phase, lastDetectedAt: 1, originalHost: "original.bilivideo.com", results: [] },
+      { candidateHosts: ["new-backup.bilivideo.com", "evil.example", "new-backup.bilivideo.com"] });
+    assert.equal(rows.length, 5);
+    assert.ok(rows.every(item => item.untested && !item.ok && item.kbps === 0));
+    assert.equal(rows.find(item => item.host === "new-backup.bilivideo.com").observed, true);
+    assert.ok(!rows.some(item => item.host === "evil.example"));
+  }
+});
+
+test("Akamai 清空测量结果后仍保留预置目录，但不伪造可用速度", () => {
+  const rows = popupRows({ disabledHosts: [] }, { phase: "original", passthroughReason: "baseline-akamai", lastDetectedAt: 1, originalHost: "upos-hz-mirrorakam.akamaized.net", results: [] });
+  assert.equal(rows.length, 3);
+  assert.ok(rows.every(item => item.preset && item.untested && !item.ok));
+});
+
+test("运行代码从不自动打开弹窗或注入播放页面板", () => {
+  const runtimeFiles = fs.readdirSync(path.join(root, "src")).filter(file => file.endsWith(".js"));
+  for (const file of runtimeFiles) {
+    assert.doesNotMatch(fs.readFileSync(path.join(root, "src", file), "utf8"), /action\.openPopup|window\.open\(|tabs\.create\(|notifications\.create/);
+  }
+  assert.doesNotMatch(fs.readFileSync(path.join(root, "src/content.js"), "utf8"), /document\.createElement|appendChild/);
 });
 
 test("复制诊断仅包含线路信息，不导出签名、播放地址或原始错误", () => {
