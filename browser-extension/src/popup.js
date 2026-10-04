@@ -1,23 +1,25 @@
-"use strict";
+import { diagnostics, hostLabel, popupView, speedLabel } from "./popup-model.js";
 
 const elements = Object.fromEntries([
   "enabled", "dot", "phase", "selected", "actual", "applyState", "message", "auto", "retest", "original",
-  "results", "testedAt", "refresh",
+  "results", "testedAt", "refresh", "statusPanel", "powerState", "modeDescription", "resultSummary", "version", "copyDiagnostics",
 ].map((id) => [id, document.getElementById(id)]));
 
 let tabId = null;
+let supported = false;
 let settings = { enabled: true, mode: "auto", manualHost: "", disabledHosts: [] };
 let state = null;
+let operationError = "";
+let settingBusy = false;
+let commandSequence = 0;
+let resultsSignature = "";
 
-function send(message) {
-  return chrome.runtime.sendMessage({ ...message, tabId });
-}
-
-function phaseText(phase) {
-  return {
-    waiting: "等待视频", testing: "正在完整测速", verifying: "正在轻量复核", active: "自动模式",
-    manual: "固定节点", original: "使用原始 CDN", error: "测速失败",
-  }[phase] || "等待视频";
+async function send(message) {
+  const response = await chrome.runtime.sendMessage({ ...message, tabId });
+  if (!response || response.ok === false) {
+    throw new Error(response?.error || "后台未响应，请在扩展管理页重新加载插件。");
+  }
+  return response;
 }
 
 function formatTime(timestamp) {
@@ -26,122 +28,193 @@ function formatTime(timestamp) {
 }
 
 function renderResults() {
-  elements.results.replaceChildren();
   const results = Array.isArray(state?.results) ? [...state.results] : [];
   results.sort((a, b) => Number(b.ok) - Number(a.ok) || b.kbps - a.kbps);
+  elements.resultSummary.textContent = results.length
+    ? results.filter((item) => item.ok && !settings.disabledHosts.includes(item.host)).length + " / " + results.length + " 可用" + (results.length > 2 ? " ↓" : "")
+    : "等待数据";
+  const signature = JSON.stringify([results, state?.selectedHost, settings.mode, settings.manualHost,
+    settings.disabledHosts, settingBusy, settings.enabled, supported]);
+  if (signature === resultsSignature) return;
+  resultsSignature = signature;
+  const focused = document.activeElement?.dataset?.actionKey;
+  elements.results.replaceChildren();
   if (!results.length) {
     const empty = document.createElement("p");
     empty.className = "empty";
-    empty.textContent = "尚无结果";
+    empty.textContent = supported ? "播放视频后显示可用线路" : "打开 B 站播放页开始优化";
     elements.results.append(empty);
     return;
   }
   for (const item of results) {
+    const excluded = settings.disabledHosts.includes(item.host);
+    const selected = settings.enabled && item.host === state?.selectedHost;
     const row = document.createElement("div");
-    row.className = `result${item.host === state?.selectedHost ? " selected" : ""}`;
+    row.className = "result" + (selected ? " selected" : "") + (excluded ? " excluded" : "");
     const info = document.createElement("div");
-    const host = document.createElement("div");
-    host.className = "host";
-    host.textContent = item.host;
+    const name = document.createElement("div");
+    name.className = "host-name";
+    name.title = item.host;
+    const label = document.createElement("span");
+    label.textContent = hostLabel(item.host);
+    name.append(label);
+    if (selected || excluded) {
+      const tag = document.createElement("small");
+      tag.textContent = excluded ? "已排除" : settings.mode === "manual" ? "已固定" : "使用中";
+      name.append(tag);
+    }
     const metrics = document.createElement("div");
     metrics.className = "metrics";
-    const stage = item.stage === "sustained" ? "完整复测" : item.stage === "verify" ? "轻量复核" : "初筛";
-    metrics.textContent = item.ok ? `${item.kbps} kbps · 首包 ${item.ttfbMs} ms · ${stage}` : `不可用 · ${item.error || item.status}`;
-    info.append(host, metrics);
+    metrics.textContent = item.ok
+      ? speedLabel(item.kbps) + " · 首包 " + Math.round(Number(item.ttfbMs) || 0) + " ms"
+      : "不可用 · " + (item.status ? "HTTP " + item.status : "请求失败");
+    metrics.title = item.ok ? (item.stage === "verify" ? "轻量复核" : item.stage === "sustained" ? "完整复测" : "初筛")
+      : String(item.error || item.status || "请检查网络后重测");
+    info.append(name, metrics);
     const actions = document.createElement("div");
     actions.className = "actions";
-    if (item.ok) {
+    if (item.ok && !excluded) {
       const use = document.createElement("button");
       use.type = "button";
-      const isFixed = settings.mode === "manual" && settings.manualHost === item.host;
-      use.textContent = isFixed ? "已固定" : "固定";
-      use.disabled = isFixed;
-      use.addEventListener("click", () => updateSettings({ mode: "manual", manualHost: item.host }, false, true));
+      use.dataset.actionKey = "use:" + item.host;
+      const fixed = settings.mode === "manual" && settings.manualHost === item.host;
+      use.textContent = fixed ? "已固定" : "固定";
+      use.setAttribute("aria-label", "固定 " + hostLabel(item.host));
+      use.disabled = fixed || settingBusy || !settings.enabled || !supported;
+      use.addEventListener("click", () => updateSettings({ enabled: true, mode: "manual", manualHost: item.host }, true));
       actions.append(use);
     }
-    const disable = document.createElement("button");
-    disable.type = "button";
-    disable.className = "disable";
-    disable.textContent = settings.disabledHosts.includes(item.host) ? "启用" : "禁用";
-    disable.addEventListener("click", () => toggleHost(item.host));
-    actions.append(disable);
+    const exclude = document.createElement("button");
+    exclude.type = "button";
+    exclude.className = "exclude";
+    exclude.dataset.actionKey = "exclude:" + item.host;
+    exclude.textContent = excluded ? "恢复" : "排除";
+    exclude.setAttribute("aria-label", (excluded ? "恢复 " : "排除 ") + hostLabel(item.host));
+    exclude.disabled = settingBusy || !supported;
+    exclude.addEventListener("click", () => toggleHost(item.host));
+    actions.append(exclude);
     row.append(info, actions);
     elements.results.append(row);
+  }
+  if (focused) {
+    for (const button of elements.results.querySelectorAll("button")) {
+      if (button.dataset.actionKey === focused && !button.disabled) button.focus();
+    }
   }
 }
 
 function render() {
-  const phase = state?.phase || "waiting";
+  const view = popupView(settings, state, { supported, error: operationError });
   elements.enabled.checked = settings.enabled;
+  elements.enabled.disabled = settingBusy || !Number.isInteger(tabId);
+  elements.statusPanel.dataset.phase = view.phase;
+  elements.phase.textContent = view.title;
+  elements.powerState.textContent = settings.enabled ? "本地线路优化" : "优化已暂停";
+  elements.dot.className = "dot " + view.phase;
+  elements.selected.textContent = view.selected ? hostLabel(view.selected) : "原始线路";
+  elements.selected.title = view.selected || state?.originalHost || "";
+  elements.actual.textContent = state?.actualHost ? hostLabel(state.actualHost) : "尚未观察";
+  elements.actual.title = state?.actualHost || "";
+  elements.applyState.textContent = view.applied;
+  elements.message.textContent = view.message;
+  elements.testedAt.textContent = state?.lastVerifiedAt
+    ? "最近复核 " + formatTime(state.lastVerifiedAt)
+    : state?.lastTestedAt ? "最近测速 " + formatTime(state.lastTestedAt) : "尚未测速";
+  elements.modeDescription.textContent = settings.mode === "manual" ? "固定线路，不自动轮换"
+    : settings.mode === "original" ? "使用 B 站默认线路" : "按缓冲状态智能切换";
+  elements.auto.setAttribute("aria-pressed", String(settings.mode === "auto"));
+  elements.original.setAttribute("aria-pressed", String(settings.mode === "original"));
+  elements.auto.disabled = settingBusy || !supported;
+  elements.original.disabled = settingBusy || !supported;
+  elements.retest.disabled = settingBusy || view.busy || !view.canRetest;
   elements.refresh.textContent = "自适应 · 15 分钟轻量复核";
-  elements.phase.textContent = phaseText(phase);
-  elements.dot.className = `dot ${phase}`;
-  elements.selected.textContent = state?.selectedHost || "尚未选择 CDN";
-  elements.actual.textContent = `最近媒体请求：${state?.actualHost || "尚未观察"}`;
-  elements.applyState.textContent = !state?.selectedHost
-    ? "等待规则"
-    : state.actualHost === state.selectedHost
-      ? "已观察到目标请求"
-      : state.ruleInstalled
-        ? "规则已安装"
-        : state.selectedHost === state.originalHost
-          ? "当前已是目标节点"
-          : "等待后续请求";
-  elements.message.textContent = state?.lastError || (
-    phase === "waiting" ? "打开 B 站视频并播放几秒。" : "规则只作用于当前 B 站播放标签页。"
-  );
-  const timing = [];
-  if (state?.lastTestedAt) timing.push(`完整 ${formatTime(state.lastTestedAt)}`);
-  if (state?.lastVerifiedAt && state.lastVerifiedAt !== state.lastTestedAt) {
-    timing.push(`复核 ${formatTime(state.lastVerifiedAt)}`);
-  }
-  elements.testedAt.textContent = timing.join(" · ");
-  const busy = phase === "testing" || phase === "verifying";
-  elements.auto.disabled = busy;
-  elements.retest.disabled = busy;
-  elements.original.disabled = busy;
   renderResults();
 }
 
-async function loadState(retry = true) {
+async function loadState() {
   const response = await send({ type: "get-state" });
-  settings = response?.settings || settings;
-  state = response?.state || null;
+  settings = response.settings || settings;
+  state = response.state || null;
   render();
-  if (!state && retry) setTimeout(() => loadState(false).catch(() => {}), 500);
 }
 
-async function updateSettings(patch, forceRetest = false, applyNow = false) {
+async function updateSettings(patch, applyNow = false) {
+  if (settingBusy) return;
+  const sequence = ++commandSequence;
+  const before = settings;
   settings = { ...settings, ...patch };
+  settingBusy = true;
+  operationError = "";
   render();
-  const response = await send({ type: "set-settings", settings, forceRetest, applyNow });
-  settings = response?.settings || settings;
-  state = response?.state || state;
-  render();
+  try {
+    const response = await send({ type: "set-settings", settings, applyNow });
+    if (sequence !== commandSequence) return;
+    settings = response.settings || settings;
+    state = response.state || state;
+  } catch (error) {
+    if (sequence !== commandSequence) return;
+    settings = before;
+    operationError = String(error?.message || error);
+  } finally {
+    if (sequence === commandSequence) settingBusy = false;
+    render();
+  }
 }
 
-async function toggleHost(host) {
+function toggleHost(host) {
   const disabled = new Set(settings.disabledHosts);
-  const disabling = !disabled.has(host);
-  if (disabling) disabled.add(host);
+  const excluding = !disabled.has(host);
+  if (excluding) disabled.add(host);
   else disabled.delete(host);
   const patch = { disabledHosts: [...disabled] };
-  if (disabling && settings.mode === "manual" && settings.manualHost === host) {
+  if (excluding && settings.mode === "manual" && settings.manualHost === host) {
     patch.mode = "auto";
     patch.manualHost = "";
   }
-  await updateSettings(patch, disabling && host === state?.selectedHost);
+  return updateSettings(patch);
+}
+
+async function retest() {
+  if (elements.retest.disabled) return;
+  const sequence = ++commandSequence;
+  const before = state;
+  operationError = "";
+  state = { ...state, phase: "testing" };
+  render();
+  try {
+    const response = await send({ type: "retest" });
+    if (sequence === commandSequence) {
+      settings = response.settings || settings;
+      state = response.state || state;
+    }
+  } catch (error) {
+    if (sequence === commandSequence) {
+      state = before;
+      operationError = String(error?.message || error);
+    }
+  }
+  render();
 }
 
 elements.enabled.addEventListener("change", () => updateSettings({ enabled: elements.enabled.checked }));
-elements.auto.addEventListener("click", () => updateSettings({ enabled: true, mode: "auto", manualHost: "" }, true));
-elements.original.addEventListener("click", () => updateSettings({ mode: "original", manualHost: "" }, false, true));
-elements.retest.addEventListener("click", async () => {
-  state = { ...state, phase: "testing" };
-  render();
-  const response = await send({ type: "retest" });
-  state = response?.state || state;
-  render();
+elements.auto.addEventListener("click", () => updateSettings({ enabled: true, mode: "auto", manualHost: "" }));
+elements.original.addEventListener("click", () => updateSettings({ mode: "original", manualHost: "" }, true));
+elements.retest.addEventListener("click", retest);
+elements.copyDiagnostics.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(
+      diagnostics(settings, state, chrome.runtime.getManifest().version), null, 2,
+    ));
+    elements.copyDiagnostics.textContent = "已复制";
+  } catch {
+    elements.copyDiagnostics.textContent = "复制失败";
+  }
+  setTimeout(() => { elements.copyDiagnostics.textContent = "复制诊断"; }, 2000);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key.toLowerCase() !== "r" || event.ctrlKey || event.metaKey || event.altKey || event.repeat
+    || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName)) return;
+  if (!elements.retest.disabled) { event.preventDefault(); retest(); }
 });
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === "state-updated" && message.tabId === tabId) {
@@ -150,15 +223,15 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
-chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+elements.version.textContent = "v" + chrome.runtime.getManifest().version;
+render();
+chrome.tabs.query({ active: true, currentWindow: true }).then(async ([tab]) => {
   tabId = tab?.id;
-  if (!Number.isInteger(tabId) || !/^https:\/\/(?:www|m)\.bilibili\.com\//i.test(tab?.url || "")) {
-    elements.message.textContent = "请先打开 B 站视频页面。";
-    document.querySelectorAll("button,select,input").forEach((control) => { control.disabled = true; });
-    return;
-  }
-  loadState().catch((error) => {
-    elements.phase.textContent = "无法读取状态";
-    elements.message.textContent = String(error?.message || error);
-  });
+  supported = Number.isInteger(tabId) && /^https:\/\/(?:www|m)\.bilibili\.com\/(?:video\/|bangumi\/play\/|cheese\/play\/)/i.test(tab?.url || "");
+  // Settings (including the power switch) are accessible outside a playback page.
+  if (Number.isInteger(tabId)) await loadState();
+  else render();
+}).catch((error) => {
+  operationError = String(error?.message || error);
+  render();
 });

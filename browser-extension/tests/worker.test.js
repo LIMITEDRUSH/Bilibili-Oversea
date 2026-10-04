@@ -3,7 +3,7 @@ import test from "node:test";
 
 const CACHE_KEY = "biliCdnAutoBenchmarkV3";
 
-function installChrome({ storage = {}, probeResult } = {}) {
+function installChrome({ storage = {}, probeResult, probeStage } = {}) {
   let messageListener;
   const ruleUpdates = [];
   const probeMessages = [];
@@ -35,6 +35,7 @@ function installChrome({ storage = {}, probeResult } = {}) {
         tabMessages.push({ tabId, message });
         if (message.type !== "probe-candidates") return undefined;
         probeMessages.push(message);
+        if (probeStage) return probeStage(message);
         return {
           ok: true,
           results: message.hosts.map((host) => probeResult?.(host, message) || ({
@@ -90,6 +91,147 @@ test("首次媒体地址执行完整测速并缓存当前标签页规则", async
   } finally {
     delete globalThis.chrome;
   }
+});
+
+test("完整测速未结束时切回原始 CDN，迟到结果不能重新安装规则", async () => {
+  let finishProbe;
+  const harness = installChrome({ probeStage: () => new Promise((resolve) => { finishProbe = resolve; }) });
+  try {
+    await import(`../src/worker.js?test=cancel-full-${Date.now()}`);
+    const discovery = send(harness.listener(), {
+      type: "media-discovered", pageUrl: "https://www.bilibili.com/video/BV6",
+      urls: ["https://origin.bilivideo.com/upgcxcode/f/video.m4s"],
+    }, { tab: { id: 16 } });
+    while (!finishProbe) await new Promise((resolve) => setTimeout(resolve, 0));
+    const switched = await send(harness.listener(), {
+      type: "set-settings", tabId: 16,
+      settings: { enabled: true, mode: "original", disabledHosts: [] },
+    });
+    assert.equal(switched.state.phase, "original");
+    finishProbe({ ok: true, results: harness.probeMessages[0].hosts.map((host) => ({
+      host, ok: true, status: 206, bytes: 1024, elapsedMs: 1,
+    })) });
+    await discovery;
+    const final = await send(harness.listener(), { type: "get-state", tabId: 16 });
+    assert.equal(final.state.phase, "original");
+    assert.equal(final.state.ruleInstalled, false);
+    assert.equal(harness.ruleUpdates.some((item) => item.addRules?.length), false);
+    assert.ok(harness.tabMessages.some(({ message }) => message.type === "cancel-probes"));
+  } finally { delete globalThis.chrome; }
+});
+
+test("轻量复核缺少安全缓冲时不把节点误记为失败", async () => {
+  const now = Date.now();
+  const storage = { [CACHE_KEY]: {
+    winnerHost: "upos-sz-mirrorcosov.bilivideo.com", lastFullTestedAt: now, lastVerifiedAt: now,
+    results: ["upos-sz-mirrorcosov.bilivideo.com", "upos-sz-mirroraliov.bilivideo.com"].map((host) => ({
+      host, ok: true, status: 206, bytes: 1024, elapsedMs: 10, sampledAt: now,
+    })),
+  } };
+  const harness = installChrome({ storage, probeStage: async () => ({ ok: false, skipped: true, results: [] }) });
+  try {
+    await import(`../src/worker.js?test=unsafe-buffer-${Date.now()}`);
+    await send(harness.listener(), {
+      type: "media-discovered", pageUrl: "https://www.bilibili.com/video/BV7",
+      urls: ["https://origin.bilivideo.com/upgcxcode/g/video.m4s"],
+    }, { tab: { id: 17 } });
+    await send(harness.listener(), { type: "media-heartbeat",
+      activity: { visible: true, paused: false, ended: false, seeking: false, bufferedAhead: 13 },
+    }, { tab: { id: 17 } });
+    const final = await send(harness.listener(), { type: "get-state", tabId: 17 });
+    assert.equal(final.state.phase, "active");
+    assert.equal(final.state.results.every((item) => item.ok), true);
+    assert.equal(harness.probeMessages.length, 1);
+  } finally { delete globalThis.chrome; }
+});
+
+test("原始与固定模式中的卡顿不会自动启动测速或轮换", async () => {
+  const storage = { biliCdnAutoSettingsV2: { enabled: true, mode: "original", disabledHosts: [] } };
+  const harness = installChrome({ storage });
+  try {
+    await import(`../src/worker.js?test=manual-stall-${Date.now()}`);
+    await send(harness.listener(), {
+      type: "media-discovered", pageUrl: "https://www.bilibili.com/video/BV8",
+      urls: ["https://origin.bilivideo.com/upgcxcode/h/video.m4s"],
+    }, { tab: { id: 18 } });
+    await send(harness.listener(), { type: "playback-stall" }, { tab: { id: 18 } });
+    assert.equal(harness.probeMessages.length, 0);
+    await send(harness.listener(), { type: "set-settings", tabId: 18, settings: {
+      enabled: true, mode: "manual", manualHost: "upos-sz-mirrorcosov.bilivideo.com", disabledHosts: [],
+    } });
+    await send(harness.listener(), { type: "playback-stall" }, { tab: { id: 18 } });
+    const final = await send(harness.listener(), { type: "get-state", tabId: 18 });
+    assert.equal(final.state.phase, "manual");
+    assert.equal(harness.probeMessages.length, 0);
+  } finally { delete globalThis.chrome; }
+});
+
+test("排除当前节点立即撤销规则并选择其他可用节点", async () => {
+  const harness = installChrome();
+  try {
+    await import(`../src/worker.js?test=exclude-active-${Date.now()}`);
+    await send(harness.listener(), {
+      type: "media-discovered", pageUrl: "https://www.bilibili.com/video/BV9",
+      urls: ["https://origin.bilivideo.com/upgcxcode/i/video.m4s"],
+    }, { tab: { id: 19 } });
+    const result = await send(harness.listener(), { type: "set-settings", tabId: 19, settings: {
+      enabled: true, mode: "auto", disabledHosts: ["upos-sz-mirrorcosov.bilivideo.com"],
+    } });
+    assert.notEqual(result.state.selectedHost, "upos-sz-mirrorcosov.bilivideo.com");
+  } finally { delete globalThis.chrome; }
+});
+
+test("轻量复核被用户取消后不会用迟到结果恢复自动规则", async () => {
+  const now = Date.now();
+  const storage = { [CACHE_KEY]: {
+    winnerHost: "upos-sz-mirrorcosov.bilivideo.com", lastFullTestedAt: now, lastVerifiedAt: now,
+    results: ["upos-sz-mirrorcosov.bilivideo.com", "upos-sz-mirroraliov.bilivideo.com"].map((host) => ({
+      host, ok: true, status: 206, bytes: 1024, elapsedMs: 10, sampledAt: now,
+    })),
+  } };
+  let finishProbe;
+  const harness = installChrome({ storage, probeStage: () => new Promise((resolve) => { finishProbe = resolve; }) });
+  try {
+    await import(`../src/worker.js?test=cancel-verify-${Date.now()}`);
+    await send(harness.listener(), { type: "media-discovered",
+      pageUrl: "https://www.bilibili.com/video/BV10", urls: ["https://origin.bilivideo.com/upgcxcode/j/a.m4s"],
+    }, { tab: { id: 20 } });
+    const heartbeat = send(harness.listener(), { type: "media-heartbeat",
+      activity: { visible: true, paused: false, ended: false, seeking: false, bufferedAhead: 13 },
+    }, { tab: { id: 20 } });
+    while (!finishProbe) await new Promise((resolve) => setTimeout(resolve, 0));
+    const ruleCount = harness.ruleUpdates.filter((item) => item.addRules?.length).length;
+    await send(harness.listener(), { type: "set-settings", tabId: 20,
+      settings: { enabled: true, mode: "original", disabledHosts: [] },
+    });
+    finishProbe({ ok: true, results: harness.probeMessages[0].hosts.map((host) => ({
+      host, ok: true, status: 206, bytes: 1024, elapsedMs: host.includes("ali") ? 1 : 20,
+    })) });
+    await heartbeat;
+    const final = await send(harness.listener(), { type: "get-state", tabId: 20 });
+    assert.equal(final.state.phase, "original");
+    assert.equal(final.state.ruleInstalled, false);
+    assert.equal(harness.ruleUpdates.filter((item) => item.addRules?.length).length, ruleCount);
+  } finally { delete globalThis.chrome; }
+});
+
+test("总开关关闭时立即移除所有已知播放标签页的规则", async () => {
+  const harness = installChrome();
+  try {
+    await import(`../src/worker.js?test=pause-all-${Date.now()}`);
+    for (const id of [21, 22]) await send(harness.listener(), { type: "media-discovered",
+      pageUrl: "https://www.bilibili.com/video/BV" + id,
+      urls: ["https://origin.bilivideo.com/upgcxcode/" + id + "/a.m4s"],
+    }, { tab: { id } });
+    await send(harness.listener(), { type: "set-settings", tabId: 21,
+      settings: { enabled: false, mode: "auto", disabledHosts: [] },
+    });
+    for (const tabId of [21, 22]) {
+      const final = await send(harness.listener(), { type: "get-state", tabId });
+      assert.equal(final.state.ruleInstalled, false);
+      assert.equal(final.state.selectedHost, "");
+    }
+  } finally { delete globalThis.chrome; }
 });
 
 test("新视频立即应用缓存赢家并在安全缓冲后只轻量复核两个节点", async () => {

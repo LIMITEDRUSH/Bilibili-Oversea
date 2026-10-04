@@ -3,41 +3,98 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
   <title>Bilibili-oversea</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <main>
-    <header>
-      <div class="brand"><img src="../assets/icons/icon-48.png" alt=""><div><h1>Bilibili-oversea</h1><p>独立实现 · 本地测速</p></div></div>
-      <label class="switch" title="启用扩展"><input id="enabled" type="checkbox"><span></span></label>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-icon"><img src="../assets/icons/icon-48.png" alt=""></span>
+        <div class="brand-copy">
+          <span class="eyebrow">PLAYBACK ROUTER</span>
+          <h1>Bilibili <span>oversea</span></h1>
+        </div>
+      </div>
+      <label class="power-switch" title="启用或暂停扩展">
+        <span class="sr-only">启用扩展</span>
+        <input id="enabled" type="checkbox" aria-describedby="powerState">
+        <span class="power-track" aria-hidden="true"><span></span></span>
+      </label>
     </header>
 
-    <section class="status-card">
-      <div class="status-line"><span id="dot" class="dot"></span><strong id="phase">等待视频</strong></div>
-      <span class="status-label">切换目标</span><code id="selected">尚未选择 CDN</code>
-      <div class="status-meta"><span id="actual">最近媒体请求：尚未观察</span><span id="applyState">等待规则</span></div>
-      <p id="message">打开 B 站视频并播放几秒。</p>
+    <section id="statusPanel" class="status-panel" data-phase="waiting" aria-live="polite">
+      <div class="status-head">
+        <div>
+          <div class="status-kicker"><span id="dot" class="dot"></span><span id="powerState">实时状态</span></div>
+          <strong id="phase">等待视频</strong>
+          <p id="message">打开 B 站视频，插件会自动接管线路。</p>
+        </div>
+        <div class="route-signal" aria-hidden="true">
+          <i></i><i></i><i></i><i></i><i></i>
+        </div>
+      </div>
+
+      <div class="route-map" aria-label="当前媒体链路">
+        <div class="route-node">
+          <span>当前请求</span>
+          <code id="actual" title="">尚未观察</code>
+        </div>
+        <div class="route-line" aria-hidden="true"><span></span></div>
+        <div class="route-node route-node-target">
+          <span>目标节点</span>
+          <code id="selected" title="">等待选择</code>
+        </div>
+      </div>
+
+      <div class="status-meta">
+        <span id="applyState" class="state-chip">等待规则</span>
+        <span id="testedAt">尚未测速</span>
+      </div>
     </section>
 
-    <section class="controls" aria-label="运行模式">
-      <button id="auto" type="button">自动优选</button>
-      <button id="retest" type="button" class="secondary">重新测速</button>
-      <button id="original" type="button" class="secondary">原始 CDN</button>
+    <section class="strategy-section" aria-labelledby="strategyTitle">
+      <div class="section-title">
+        <div><h2 id="strategyTitle">播放策略</h2></div>
+        <span id="modeDescription">自动选择更稳定的线路</span>
+      </div>
+      <div class="mode-control" role="group" aria-label="播放策略">
+        <button id="auto" type="button" aria-pressed="true">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10a6 6 0 0 1 10.6-3.8M16 10a6 6 0 0 1-10.6 3.8M14.6 3.8v3.1h-3.1M5.4 16.2v-3.1h3.1"/></svg>
+          <span>自动</span><small>推荐</small>
+        </button>
+        <button id="original" type="button" aria-pressed="false">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 10h13M10 3.5v13"/></svg>
+          <span>原始 CDN</span>
+        </button>
+      </div>
+      <button id="retest" class="retest-button" type="button">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 6.4A6.3 6.3 0 1 0 16 13M15.5 6.4V2.8M15.5 6.4h-3.6"/></svg>
+        <span>重测线路</span>
+        <kbd>R</kbd>
+      </button>
     </section>
 
-    <section>
-      <div class="section-title"><h2>测速结果</h2><span id="testedAt"></span></div>
-      <div id="results" class="results"><p class="empty">尚无结果</p></div>
+    <section class="results-section" aria-labelledby="resultsTitle">
+      <div class="section-title">
+        <div><h2 id="resultsTitle">节点实测</h2></div>
+        <span id="resultSummary">等待数据</span>
+      </div>
+      <div id="results" class="results" tabindex="0" aria-label="实测节点列表，可滚动"><p class="empty">播放视频后显示可用线路</p></div>
     </section>
 
-    <section class="settings">
-      <span>线路维护</span>
-      <strong id="refresh">自适应 · 15 分钟</strong>
+    <section class="maintenance" aria-label="线路维护策略">
+      <span class="maintenance-mark" aria-hidden="true"><i></i></span>
+      <div><span>线路维护</span><strong id="refresh">自适应 · 15 分钟轻量复核</strong></div>
     </section>
 
-    <footer><a href="https://limitedrush.github.io/Bilibili-Oversea/browser-guide.html" target="_blank" rel="noreferrer">安装与使用教程</a><span>v2.2.0</span></footer>
+    <footer>
+      <a href="https://limitedrush.github.io/Bilibili-Oversea/browser-guide.html" target="_blank" rel="noreferrer">使用与排错 <span aria-hidden="true">↗</span></a>
+      <button id="copyDiagnostics" type="button">复制诊断</button>
+      <span id="version">v—</span>
+    </footer>
   </main>
-  <script src="popup.js"></script>
+  <script type="module" src="popup.js"></script>
 </body>
 </html>

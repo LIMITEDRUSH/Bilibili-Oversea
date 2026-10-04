@@ -7,9 +7,9 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
 
-test("使用独立 2.2 MV3 后台", () => {
+test("清单与发布版本一致，使用独立 MV3 后台", () => {
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, "2.2.0");
+  assert.equal(manifest.version, JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version);
   assert.equal(manifest.name, "Bilibili-oversea");
   assert.equal(manifest.background.service_worker, "src/worker.js");
 });
@@ -44,4 +44,8 @@ test("新版图标提供清单要求的全部 PNG 尺寸", () => {
     assert.equal(bytes.readUInt32BE(20), Number(declaredSize), `${file} height`);
   }
   assert.equal(fs.existsSync(path.join(root, "assets/brand/icon-master.png")), true);
+  const vector = fs.readFileSync(path.join(root, "assets/brand/icon.svg"), "utf8");
+  assert.doesNotMatch(vector, /gradient|filter|<text|<image/i);
+  assert.match(vector, /#424d5e/);
+  assert.match(vector, /#456fa8/);
 });

@@ -1,4 +1,4 @@
-# Bilibili-oversea 浏览器扩展 2.2
+# Bilibili-oversea 浏览器扩展 2.3
 
 适用于 Chrome 111+、Edge 111+ 及兼容 Manifest V3 的 Chromium 浏览器。
 
@@ -9,11 +9,19 @@
 
 完整步骤见：<https://limitedrush.github.io/Bilibili-Oversea/browser-guide.html>
 
-1. 下载并解压 `bilibili-oversea-browser-v2.2.0.zip`。
+1. 下载并解压 `bilibili-oversea-browser-v2.3.0.zip`。
 2. Chrome 打开 `chrome://extensions`；Edge 打开 `edge://extensions`。
 3. 开启“开发者模式”，点击“加载已解压的扩展程序”。
 4. 选择解压后包含 `manifest.json` 的目录。
 5. 打开或刷新 B 站视频页面，播放几秒，再点击扩展图标查看测速结果。
+
+## 2.3 更新
+
+- 亮色毛玻璃工作台：浅灰、半透明白色与石墨色文字，无渐变；链路状态、自动/原始模式、Mbps 实测列表与可取消的重测。
+- 自动模式优先复用缓存；仅“重测线路”强制重测。
+- 切回原始、暂停、固定线路或换视频时取消旧测速，迟到的结果不会重新安装规则。
+- 缓冲不足时跳过复核，不误判节点失败；自动模式卡顿恢复优先轮换备用节点。
+- 跨平台标准 ZIP，根目录直接包含 manifest.json，并提供 SHA-256 校验文件。
 
 ## 工作方式
 
@@ -25,12 +33,12 @@
 - 仅为当前 B 站播放标签页添加 Chrome 会话重定向规则；
 - 每 2 秒监测缓冲；低于 8 秒且持续快速下降，或经确认的 `waiting/stalled` 发生时，立即切换到下一个已验证节点并轻微回退；
 - 完整成功结果缓存 3 小时，失败结果缓存 10 分钟；线路明显变慢、失败、网络变化或候选耗尽时才完整测速；
-- 支持自动优选、立即重测、固定节点、禁用节点和恢复原始 CDN。
+- 支持自动、重测线路、固定节点、排除节点和恢复原始 CDN。
 
 ## 权限
 
 - `activeTab`：打开弹窗时读取当前标签页；
-- `storage`：保存模式、禁用节点和重测间隔；
+- `storage`：保存模式、排除节点和本地测速缓存；
 - `declarativeNetRequestWithHostAccess`：建立仅限当前播放标签页的临时 CDN 规则；
 - 主机范围仅为明确的 B 站页面、`*.bilivideo.com` 和 B 站的 `*.mcdn.bilivideo.cn` 媒体域名。
 

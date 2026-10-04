@@ -46,6 +46,7 @@ function newTabState() {
     failedHosts: new Set(),
     runId: 0,
     testing: null,
+    verificationPending: false,
   };
 }
 
@@ -119,6 +120,15 @@ async function clearRule(tabId) {
   if (tabStates.has(tabId)) tabStates.get(tabId).ruleInstalled = false;
 }
 
+function cancelTesting(tabId) {
+  const state = tabStates.get(tabId);
+  if (!state?.testing && !state?.verificationPending) return;
+  state.runId += 1;
+  state.testing = null;
+  state.verificationPending = false;
+  chrome.tabs.sendMessage(tabId, { type: "cancel-probes" }).catch(() => {});
+}
+
 async function applyTarget(tabId, targetHost, phase = "active") {
   const state = stateFor(tabId);
   const rule = makeRedirectRule({
@@ -155,6 +165,7 @@ async function probeCandidates(tabId, sourceUrl, candidates, {
   } catch (error) {
     response = { ok: false, error: String(error?.message || error), results: [] };
   }
+  if (response?.skipped) return null;
   const rawResults = Array.isArray(response?.results) ? response.results : [];
   const byHost = new Map(rawResults
     .filter((item) => candidates.includes(String(item?.host || "").toLowerCase()))
@@ -179,11 +190,13 @@ async function probeCandidates(tabId, sourceUrl, candidates, {
 async function benchmark(tabId, reason = "automatic") {
   const state = stateFor(tabId);
   if (state.testing) return state.testing;
+  if (state.verificationPending) return null;
   const sourceUrl = state.sourceUrls.find(isMediaUrl);
   if (!sourceUrl) return null;
   const testing = (async () => {
     const runId = ++state.runId;
     const settings = await readSettings();
+    if (runId !== state.runId) return null;
     const disabled = new Set(settings.disabledHosts);
     const candidates = uniqueHosts([
       state.originalHost, ...DEFAULT_CANDIDATES, ...state.observedHosts, settings.manualHost,
@@ -193,8 +206,15 @@ async function benchmark(tabId, reason = "automatic") {
     await setBadge(tabId, "testing");
     await publish(tabId);
 
+    if (runId !== state.runId) return null;
     const quickResults = await probeCandidates(tabId, sourceUrl, candidates);
     if (runId !== state.runId) return null;
+    if (!quickResults) {
+      state.phase = state.selectedHost ? "active" : "waiting";
+      await setBadge(tabId, state.phase);
+      await publish(tabId);
+      return null;
+    }
     state.results = quickResults;
     const quickRanked = rankResults(quickResults, state.originalHost);
     if (!quickRanked.length) {
@@ -223,7 +243,7 @@ async function benchmark(tabId, reason = "automatic") {
       waitTimeoutMs: 15_000,
     });
     if (runId !== state.runId) return null;
-    const sustainedByHost = new Map(sustainedResults
+    const sustainedByHost = new Map((sustainedResults || [])
       .filter((item) => item.ok)
       .map((item) => [item.host, item]));
     const now = Date.now();
@@ -235,10 +255,11 @@ async function benchmark(tabId, reason = "automatic") {
     state.lastVerifiedAt = now;
     state.verifiedVideoKey = state.videoKey;
     state.failedHosts.clear();
-    const finalRanked = rankResults(sustainedResults, state.originalHost);
+    const finalRanked = rankResults(sustainedResults || [], state.originalHost);
     const winner = finalRanked[0] || quickRanked[0];
     await persistStateCache(state, winner.host);
     const latestSettings = await readSettings();
+    if (runId !== state.runId) return null;
     if (!latestSettings.enabled || latestSettings.mode !== "auto") {
       await honorMode(tabId);
       return winner;
@@ -287,18 +308,28 @@ async function honorMode(tabId, { forceRetest = false } = {}) {
   const state = stateFor(tabId);
   const settings = await readSettings();
   if (!settings.enabled || settings.mode === "original") {
+    cancelTesting(tabId);
     if (state.phase === "original" && !state.ruleInstalled) return;
     state.phase = "original";
     state.selectedHost = "";
+    state.lastError = "";
     await clearRule(tabId);
     await setBadge(tabId, "original");
     await publish(tabId);
     return;
   }
   if (settings.mode === "manual" && isBiliVideoHost(settings.manualHost)) {
+    cancelTesting(tabId);
+    state.lastError = "";
     if (state.phase === "manual" && state.selectedHost === settings.manualHost) return;
     await applyTarget(tabId, settings.manualHost, "manual");
     return;
+  }
+  if (settings.disabledHosts.includes(state.selectedHost)) {
+    cancelTesting(tabId);
+    state.results = state.results.filter((item) => !settings.disabledHosts.includes(item.host));
+    state.selectedHost = "";
+    await clearRule(tabId);
   }
   if (forceRetest) return benchmark(tabId, "manual");
   if (!state.selectedHost || !state.results.length) {
@@ -347,6 +378,7 @@ async function rememberMedia(tabId, urls, { source = "page", observed = false, p
 
 async function resetForNavigation(tabId, pageUrl) {
   const state = stateFor(tabId);
+  cancelTesting(tabId);
   state.runId += 1;
   state.testing = null;
   state.sourceUrls = [];
@@ -379,12 +411,14 @@ function markHostFailed(state, host, reason) {
 
 async function recoverFromStall(tabId, reason = "stall") {
   const state = stateFor(tabId);
-  if (state.testing) return state.testing;
+  const settings = await readSettings();
+  if (!settings.enabled || settings.mode !== "auto") return null;
+  cancelTesting(tabId);
   if (!state.selectedHost || !state.results.length) return benchmark(tabId, reason);
   const failedHost = state.selectedHost;
   state.failedHosts.add(failedHost);
   markHostFailed(state, failedHost, `playback ${reason}`);
-  const disabled = new Set((await readSettings()).disabledHosts);
+  const disabled = new Set(settings.disabledHosts);
   const next = rankResults(state.results, state.originalHost)
     .find((item) => !state.failedHosts.has(item.host) && !disabled.has(item.host));
   if (next) {
@@ -399,10 +433,15 @@ async function recoverFromStall(tabId, reason = "stall") {
 
 async function lightVerify(tabId, reason = "periodic") {
   const state = stateFor(tabId);
-  if (state.testing) return state.testing;
+  if (state.testing || state.verificationPending) return state.testing;
   const sourceUrl = state.sourceUrls.find(isMediaUrl);
   if (!sourceUrl || !state.selectedHost) return null;
-  const settings = await readSettings();
+  const pendingRunId = state.runId;
+  state.verificationPending = true;
+  let settings;
+  try { settings = await readSettings(); }
+  finally { state.verificationPending = false; }
+  if (pendingRunId !== state.runId) return null;
   if (!settings.enabled || settings.mode !== "auto") return null;
   const disabled = new Set(settings.disabledHosts);
   const ranked = rankResults(state.results, state.originalHost)
@@ -411,18 +450,28 @@ async function lightVerify(tabId, reason = "periodic") {
   if (!backup) return benchmark(tabId, "verify-no-backup");
   const hosts = uniqueHosts([state.selectedHost, backup.host], 2);
   const operation = (async () => {
+    const runId = ++state.runId;
     state.phase = "verifying";
     state.lastError = "";
     await setBadge(tabId, "verifying");
     await publish(tabId);
     const now = Date.now();
-    const verified = stampResults(await probeCandidates(tabId, sourceUrl, hosts, {
+    if (runId !== state.runId) return null;
+    const probeResults = await probeCandidates(tabId, sourceUrl, hosts, {
       byteLimit: ADAPTIVE_POLICY.lightProbeBytes,
       timeoutMs: ADAPTIVE_POLICY.lightProbeTimeoutMs,
       stage: "verify",
       waitForBufferSeconds: ADAPTIVE_POLICY.safeBufferSeconds,
       waitTimeoutMs: 4_000,
-    }), now);
+    });
+    if (runId !== state.runId) return null;
+    if (!probeResults) {
+      state.phase = "active";
+      await setBadge(tabId, "active");
+      await publish(tabId);
+      return null;
+    }
+    const verified = stampResults(probeResults, now);
     state.results = mergeResults(state.results, verified);
     state.lastVerifiedAt = now;
     state.verifiedVideoKey = state.videoKey;
@@ -506,12 +555,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message?.type === "network-changed" && Number.isInteger(senderTabId)) {
       const state = stateFor(senderTabId);
+      cancelTesting(senderTabId);
       state.lastTestedAt = 0;
       state.lastVerifiedAt = 0;
       state.selectedHost = "";
       state.failedHosts.clear();
       await clearRule(senderTabId);
-      if (state.sourceUrls.length) await benchmark(senderTabId, "network-change");
+      const settings = await readSettings();
+      if (state.sourceUrls.length && settings.enabled && settings.mode === "auto") {
+        await benchmark(senderTabId, "network-change");
+      } else await honorMode(senderTabId);
       return { ok: true };
     }
     const tabId = Number(message?.tabId);
@@ -521,6 +574,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message?.type === "set-settings" && Number.isInteger(tabId)) {
       const settings = await writeSettings(message.settings);
+      if (!settings.enabled || settings.mode !== "auto") {
+        await Promise.all([...tabStates.keys()].filter((id) => id !== tabId).map((id) => honorMode(id)));
+      }
       await honorMode(tabId, { forceRetest: message.forceRetest === true });
       if (message.applyNow === true) {
         chrome.tabs.sendMessage(tabId, { type: "retry-playback", reason: "manual-switch" }).catch(() => {});
@@ -529,13 +585,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message?.type === "retest" && Number.isInteger(tabId)) {
       const state = stateFor(tabId);
+      if (!state.sourceUrls.length) return { ok: false, error: "尚未发现视频请求，请先开始播放。" };
+      const settings = await writeSettings({ ...await readSettings(), enabled: true, mode: "auto", manualHost: "" });
+      cancelTesting(tabId);
       state.lastTestedAt = 0;
       state.lastVerifiedAt = 0;
       state.selectedHost = "";
       state.failedHosts.clear();
       await clearRule(tabId);
       await benchmark(tabId, "manual");
-      return { ok: true, state: publicTabState(state) };
+      return { ok: true, settings, state: publicTabState(state) };
     }
     return { ok: false };
   };

@@ -19,6 +19,8 @@
   const seenResourceEntries = new Set();
   const probeSuppressions = new Map();
   const bufferHistory = [];
+  const probeControllers = new Set();
+  let probeGeneration = 0;
   let activeVideo = null;
   let videoStartedAt = 0;
   let healthArmed = false;
@@ -125,6 +127,7 @@
 
   async function probe(sourceUrl, host, byteLimit, timeoutMs) {
     const controller = new AbortController();
+    probeControllers.add(controller);
     const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
     const started = performance.now();
     let ttfbMs = 0;
@@ -153,6 +156,7 @@
         error: error?.name === "AbortError" ? "timeout" : String(error?.message || error),
       };
     } finally {
+      probeControllers.delete(controller);
       window.clearTimeout(timeout);
     }
   }
@@ -168,29 +172,35 @@
     return 0;
   }
 
-  async function waitForSafeBuffer(minimumSeconds, maximumWaitMs) {
+  async function waitForSafeBuffer(minimumSeconds, maximumWaitMs, generation) {
     const minimum = Math.max(0, Number(minimumSeconds) || 0);
     if (!minimum) return true;
     if (!activeVideo || activeVideo.paused || activeVideo.ended || document.hidden) return false;
     const deadline = Date.now() + Math.max(0, Number(maximumWaitMs) || 0);
-    while (Date.now() < deadline && activeVideo && !activeVideo.ended) {
+    do {
+      if (generation !== probeGeneration || !activeVideo || activeVideo.paused
+        || activeVideo.ended || activeVideo.seeking || document.hidden) return false;
       if (bufferedAhead(activeVideo) >= minimum) return true;
+      if (Date.now() >= deadline) return false;
       await new Promise((resolve) => window.setTimeout(resolve, 500));
-    }
+    } while (Date.now() <= deadline);
     return false;
   }
 
   async function probeCandidates(message) {
+    const generation = probeGeneration;
     const sourceUrl = String(message?.sourceUrl || "");
     const hosts = [...new Set((Array.isArray(message?.hosts) ? message.hosts : [])
       .map((host) => String(host).toLowerCase()).filter(isMediaHost))].slice(0, 8);
     const byteLimit = Math.min(MAX_PROBE_BYTES, Math.max(1, Number(message?.byteLimit) || 128 * 1024));
     const timeoutMs = Math.min(MAX_PROBE_TIMEOUT_MS, Math.max(1_000, Number(message?.timeoutMs) || 4_500));
     if (!hosts.length) return { ok: false, error: "no valid probe hosts", results: [] };
-    if (!await waitForSafeBuffer(message?.waitForBufferSeconds, message?.waitTimeoutMs)) {
-      return { ok: false, error: "safe buffer unavailable", results: [] };
+    if (!await waitForSafeBuffer(message?.waitForBufferSeconds, message?.waitTimeoutMs, generation)
+      || generation !== probeGeneration) {
+      return { ok: false, skipped: true, error: "safe buffer unavailable", results: [] };
     }
     const results = await Promise.all(hosts.map((host) => probe(sourceUrl, host, byteLimit, timeoutMs)));
+    if (generation !== probeGeneration) return { ok: false, skipped: true, results: [] };
     return { ok: true, results };
   }
 
@@ -202,6 +212,7 @@
     const now = Date.now();
     if (now - lastStallAt < STALL_COOLDOWN_MS) return;
     lastStallAt = now;
+    cancelProbes();
     send({ type: "playback-stall", reason, connection: connectionHint() });
   }
 
@@ -291,6 +302,7 @@
   function reportNavigation(url = location.href) {
     if (url === lastUrl) return;
     lastUrl = url;
+    cancelProbes();
     discoveredUrls.clear();
     bufferHistory.length = 0;
     videoStartedAt = Date.now();
@@ -348,6 +360,11 @@
   });
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === "cancel-probes") {
+      cancelProbes();
+      sendResponse({ ok: true });
+      return false;
+    }
     if (message?.type === "rescan") {
       periodicDiscovery();
       return false;
@@ -368,6 +385,12 @@
     }
     return false;
   });
+
+  function cancelProbes() {
+    probeGeneration += 1;
+    for (const controller of probeControllers) controller.abort();
+    probeControllers.clear();
+  }
 
   const observer = new MutationObserver(locateVideo);
   function startObserver() {

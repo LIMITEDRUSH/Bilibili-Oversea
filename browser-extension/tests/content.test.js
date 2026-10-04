@@ -24,6 +24,7 @@ test("媒体测速在页面内容上下文中保留正常 Referer 策略", async
     addEventListener(type, listener) { connectionListeners.set(type, listener); },
   };
   let resourceEntries = [];
+  let hangingProbe = false;
   const window = {
     addEventListener(type, listener) { windowListeners.set(type, listener); },
     postMessage() {},
@@ -49,6 +50,9 @@ test("媒体测速在页面内容上下文中保留正常 Referer 策略", async
     },
     fetch: async (url, options) => {
       requests.push({ url, options });
+      if (hangingProbe) return new Promise((_resolve, reject) => {
+        options.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+      });
       return new Response(new Uint8Array(2_048), { status: 206 });
     },
     location: { href: "https://www.bilibili.com/video/BV1", origin: "https://www.bilibili.com" },
@@ -107,6 +111,20 @@ test("媒体测速在页面内容上下文中保留正常 Referer 策略", async
   connectionListeners.get("change")();
   assert.equal(sentMessages.filter((message) => message.type === "network-changed").length, 1);
   assert.equal(typeof windowListeners.get("offline"), "function");
+
+  hangingProbe = true;
+  const pending = new Promise((resolve) => messageListener({
+    type: "probe-candidates", sourceUrl: "https://origin.bilivideo.com/upgcxcode/a/video.m4s?token=1",
+    hosts: ["upos-sz-mirrorcosov.bilivideo.com"], byteLimit: 1024, timeoutMs: 4500,
+  }, {}, resolve));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  let cancelAcknowledged = false;
+  messageListener({ type: "cancel-probes" }, {}, (response) => { cancelAcknowledged = response.ok; });
+  const cancelled = await pending;
+  assert.equal(cancelAcknowledged, true);
+  assert.equal(requests.at(-1).options.signal.aborted, true);
+  assert.equal(cancelled.skipped, true);
+  assert.equal(cancelled.results.length, 0);
 });
 
 test("每两秒监测缓冲并在低于八秒且快速下降时提前恢复", () => {

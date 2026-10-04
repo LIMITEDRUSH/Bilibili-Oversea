@@ -27,8 +27,11 @@ VPN 配置；开始播放视频后，脚本自动实测候选 CDN，并使用当
 1. 在安装页点击“导入 Shadowrocket”。
 2. 允许 Safari 打开 Shadowrocket。
 3. 在模块导入确认页添加 `Bili CDN Auto`，保持默认参数即可。
-4. 进入 Shadowrocket 的配置/模块页面，确认 `Bili CDN Auto` 已存在并已启用。
-5. 回到首页，选择你平时使用的配置或节点。
+4. 点击底部 Config（配置）→ Modules（模块），确认 `Bili CDN Auto` 已存在并已启用。
+5. 回到首页，选择可用节点，并打开连接开关。模块不会出现在 Home 的节点订阅列表中。
+
+若一键导入后找不到模块，在 Config → Modules → + 中手动添加：
+`https://raw.githubusercontent.com/LIMITEDRUSH/Bilibili-Oversea/main/dist/BiliCDNAuto.shadowrocket.module`。
 
 ### Surge
 
@@ -53,7 +56,7 @@ VPN 配置；开始播放视频后，脚本自动实测候选 CDN，并使用当
 
 ### Quantumult X（实验性）
 
-安装页提供 `.snippet` 地址。把其中的 `[rewrite_local]` 和 `[mitm]` 合并到自己的 Quantumult X
+安装页提供 `.snippet` 地址。把其中的 `[rewrite_local]`、`[task_local]` 和 `[mitm]` 合并到自己的 Quantumult X
 配置并更新资源。由于 Quantumult X 没有与其他四款相同的一键模块流程，建议熟悉其配置格式后再使用。
 
 ## 3. 生成、安装并信任自己的证书

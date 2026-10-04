@@ -1,13 +1,14 @@
 {
   "baseUrl": "https://raw.githubusercontent.com/LIMITEDRUSH/Bilibili-Oversea/main",
-  "generatedAt": "2026-09-25T19:50:57.473Z",
+  "generatedAt": "2026-10-04T04:15:07.394Z",
   "links": {
     "surge": "surge:///install-module?url=https%3A%2F%2Fraw.githubusercontent.com%2FLIMITEDRUSH%2FBilibili-Oversea%2Fmain%2Fdist%2FBiliCDNAuto.surge.sgmodule",
     "shadowrocket": "shadowrocket://install?module=https%3A%2F%2Fraw.githubusercontent.com%2FLIMITEDRUSH%2FBilibili-Oversea%2Fmain%2Fdist%2FBiliCDNAuto.shadowrocket.module",
     "loon": "https://www.nsloon.com/openloon/import?plugin=https%3A%2F%2Fraw.githubusercontent.com%2FLIMITEDRUSH%2FBilibili-Oversea%2Fmain%2Fdist%2FBiliCDNAuto.loon.plugin",
     "stash": "stash://install-override?url=https%3A%2F%2Fraw.githubusercontent.com%2FLIMITEDRUSH%2FBilibili-Oversea%2Fmain%2Fdist%2FBiliCDNAuto.stash.stoverride",
     "quantumultx": "https://raw.githubusercontent.com/LIMITEDRUSH/Bilibili-Oversea/main/dist/BiliCDNAuto.quantumultx.snippet",
-    "browser": "https://raw.githubusercontent.com/LIMITEDRUSH/Bilibili-Oversea/main/browser-extension/dist/bilibili-oversea-browser-v2.2.0.zip",
+    "browser": "https://raw.githubusercontent.com/LIMITEDRUSH/Bilibili-Oversea/main/browser-extension/dist/bilibili-oversea-browser-v2.3.0.zip",
+    "browser_sha256": "https://raw.githubusercontent.com/LIMITEDRUSH/Bilibili-Oversea/main/browser-extension/dist/bilibili-oversea-browser-v2.3.0.zip.sha256",
     "shortcut": "./BiliCDNAuto-ConnectVPN.shortcut"
   }
 }

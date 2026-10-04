@@ -54,6 +54,7 @@ const links = {
   stash: `stash://install-override?url=${encodeURIComponent(configUrls[templates[3]])}`,
   quantumultx: configUrls[templates[4]],
   browser: `${baseUrl}/browser-extension/dist/bilibili-oversea-browser-v${browserManifest.version}.zip`,
+  browser_sha256: `${baseUrl}/browser-extension/dist/bilibili-oversea-browser-v${browserManifest.version}.zip.sha256`,
   shortcut: `./${shortcutNames[0]}`,
 };
 
@@ -64,6 +65,7 @@ const pages = [
 ];
 for (const [templateName, outputName] of pages) {
   let html = await fs.readFile(path.join(root, "site", templateName), "utf8");
+  html = html.replaceAll("__BROWSER_VERSION__", browserManifest.version);
   for (const [key, value] of Object.entries(links)) {
     html = html.replaceAll(`__${key.toUpperCase()}__`, value);
   }
