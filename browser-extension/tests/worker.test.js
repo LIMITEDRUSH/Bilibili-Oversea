@@ -173,13 +173,14 @@ test("后台唤醒批次中的大量音频不能挤掉视频；无关原始地�
   } finally {delete globalThis.chrome;}
 });
 
-function installChrome({ storage = {}, probeResult, probeStage, updateRule } = {}) {
+function installChrome({ storage = {}, probeResult, probeStage, updateRule, storageGet, storageSet } = {}) {
   let messageListener;
   const ruleUpdates = [];
   const probeMessages = [];
   const tabMessages = [];
   const broadcasts = [];
   const events = {};
+  const sessionRules = new Map();
   const noopEvent = { addListener() {} };
   globalThis.chrome = {
     action: {
@@ -187,7 +188,11 @@ function installChrome({ storage = {}, probeResult, probeStage, updateRule } = {
       setBadgeBackgroundColor: async () => {},
     },
     declarativeNetRequest: {
-      updateSessionRules: async (update) => { ruleUpdates.push(update); if (updateRule) await updateRule(update); },
+      updateSessionRules: async (update) => {
+        ruleUpdates.push(update); if (updateRule) await updateRule(update);
+        for (const id of update.removeRuleIds || []) sessionRules.delete(id);
+        for (const rule of update.addRules || []) sessionRules.set(rule.id, rule);
+      },
     },
     runtime: {
       id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -197,8 +202,8 @@ function installChrome({ storage = {}, probeResult, probeStage, updateRule } = {
     },
     storage: {
       local: {
-        async get(key) { return { [key]: storage[key] }; },
-        async set(value) { Object.assign(storage, value); },
+        async get(key) { return storageGet ? storageGet(key, storage) : { [key]: storage[key] }; },
+        async set(value) { if (storageSet) await storageSet(value); Object.assign(storage, value); },
       },
     },
     tabs: {
@@ -230,6 +235,7 @@ function installChrome({ storage = {}, probeResult, probeStage, updateRule } = {
     tabMessages,
     broadcasts,
     events,
+    sessionRules,
     listener: () => messageListener,
   };
 }
@@ -295,6 +301,196 @@ function send(listener, message, sender = {}) {
     assert.equal(keepAlive, true);
   });
 }
+
+const playbackSender = id => ({ tab: { id } });
+const videoDiscovery = (id, path = id) => {
+  const url = `https://upos-sz-mirrorcosov.bilivideo.com/upgcxcode/${path}/video.m4s`;
+  return { type: "media-discovered", pageUrl: `https://www.bilibili.com/video/BV${id}`,
+    urls: [url], tracks: [{ url, kind: "video" },
+      { url: url.replace("mirrorcosov", "mirroraliov"), kind: "video" }], requested: true, source: "page-request" };
+};
+const safeHeartbeat = { type: "media-heartbeat", activity: {
+  visible: true, paused: false, ended: false, seeking: false, bufferedAhead: 20,
+} };
+
+test("关闭视频标签再打开另一个：复用缓存、重新复核并自动轮换，旧规则清理", async () => {
+  const harness = installChrome({ storage: cachedFixture() });
+  try {
+    await import(`../src/worker.js?lifecycle-normal=${Date.now()}`);
+    await send(harness.listener(), videoDiscovery(91), playbackSender(91));
+    await send(harness.listener(), safeHeartbeat, playbackSender(91));
+    harness.events.removed(91);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal((await send(harness.listener(), { type: "get-state", tabId: 91 })).state, null);
+    const before = harness.probeMessages.length;
+    await send(harness.listener(), videoDiscovery(92), playbackSender(92));
+    let state = (await send(harness.listener(), { type: "get-state", tabId: 92 })).state;
+    assert.equal(state.selectedHost, "upos-sz-mirrorcosov.bilivideo.com");
+    assert.equal(harness.probeMessages.length, before, "缓存先应用，不等测速开播");
+    await send(harness.listener(), safeHeartbeat, playbackSender(92));
+    assert.equal(harness.probeMessages.length, before + 1);
+    assert.equal(harness.probeMessages.at(-1).byteLimit, 256 * 1024);
+    assert.match(harness.probeMessages.at(-1).sourceUrl, /\/92\/video/);
+    await send(harness.listener(), { type: "playback-stall", reason: "waiting" }, playbackSender(92));
+    state = (await send(harness.listener(), { type: "get-state", tabId: 92 })).state;
+    assert.equal(state.selectedHost, "upos-sz-mirroraliov.bilivideo.com");
+    assert.equal(harness.sessionRules.has(1_000_091), false);
+    assert.deepEqual(harness.sessionRules.get(1_000_092).condition.tabIds, [92]);
+  } finally { delete globalThis.chrome; }
+});
+
+test("关页发生在缓存读取期间，迟到缓存不能重建旧状态或规则，新页仍工作", async () => {
+  let finishCache, first = true;
+  const harness = installChrome({ storage: cachedFixture(), storageGet: (key, storage) => {
+    if (key === CACHE_KEY && first) { first = false; return new Promise(resolve => { finishCache = () => resolve({ [key]: storage[key] }); }); }
+    return { [key]: storage[key] };
+  } });
+  try {
+    await import(`../src/worker.js?lifecycle-cache-race=${Date.now()}`);
+    const old = send(harness.listener(), videoDiscovery(93), playbackSender(93));
+    while (!finishCache) await new Promise(resolve => setTimeout(resolve, 0));
+    harness.events.removed(93);
+    await send(harness.listener(), videoDiscovery(94), playbackSender(94));
+    finishCache(); await old;
+    assert.equal((await send(harness.listener(), { type: "get-state", tabId: 93 })).state, null);
+    assert.equal(harness.sessionRules.has(1_000_093), false);
+    assert.equal((await send(harness.listener(), { type: "get-state", tabId: 94 })).state.ruleInstalled, true);
+  } finally { delete globalThis.chrome; }
+});
+
+test("关页发生在规则安装期间：最后撤销旧规则，不再发第二轮测速，新页不受影响", async () => {
+  let finishRule, firstRule = true;
+  const harness = installChrome({ updateRule: update => {
+    if (firstRule && update.addRules?.some(rule => rule.id === 1_000_095)) {
+      firstRule = false; return new Promise(resolve => { finishRule = resolve; });
+    }
+  } });
+  try {
+    await import(`../src/worker.js?lifecycle-rule-race=${Date.now()}`);
+    const old = send(harness.listener(), videoDiscovery(95), playbackSender(95));
+    const start = Date.now();
+    while (!finishRule && Date.now() - start < 2000) await new Promise(resolve => setTimeout(resolve, 0));
+    assert.ok(finishRule, JSON.stringify({ updates: harness.ruleUpdates, probes: harness.probeMessages, response: !finishRule ? await old : undefined }));
+    harness.events.removed(95);
+    await send(harness.listener(), videoDiscovery(96), playbackSender(96));
+    finishRule(); await old;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal((await send(harness.listener(), { type: "get-state", tabId: 95 })).state, null);
+    assert.equal(harness.sessionRules.has(1_000_095), false);
+    assert.deepEqual(harness.sessionRules.get(1_000_096).condition.tabIds, [96]);
+    assert.equal(harness.tabMessages.filter(item => item.tabId === 95 && item.message.type === "probe-candidates").length, 1);
+  } finally { delete globalThis.chrome; }
+});
+
+test("关页发生在心跳读取设置期间，不会由维护入口重建旧标签状态", async () => {
+  let finishSettings, delay = false;
+  const harness = installChrome({ storage: cachedFixture(), storageGet: (key, storage) => {
+    if (delay && key === "biliCdnAutoSettingsV2") {
+      delay = false; return new Promise(resolve => { finishSettings = () => resolve({ [key]: storage[key] }); });
+    }
+    return { [key]: storage[key] };
+  } });
+  try {
+    await import(`../src/worker.js?lifecycle-heartbeat-race=${Date.now()}`);
+    await send(harness.listener(), videoDiscovery(97), playbackSender(97));
+    delay = true;
+    const pending = send(harness.listener(), safeHeartbeat, playbackSender(97));
+    while (!finishSettings) await new Promise(resolve => setTimeout(resolve, 0));
+    harness.events.removed(97); finishSettings(); await pending;
+    assert.equal((await send(harness.listener(), { type: "get-state", tabId: 97 })).state, null);
+    assert.equal(harness.sessionRules.has(1_000_097), false);
+    assert.equal(harness.probeMessages.length, 0);
+  } finally { delete globalThis.chrome; }
+});
+
+test("旧页规则安装期间重新加载同一标签，撤销不覆盖新状态，新规则最后生效", async () => {
+  let finishRule, first = true;
+  const harness = installChrome({ storage: cachedFixture(), updateRule: update => {
+    if (first && update.addRules?.some(rule => rule.id === 1_000_098)) {
+      first = false; return new Promise(resolve => { finishRule = resolve; });
+    }
+  } });
+  try {
+    await import(`../src/worker.js?lifecycle-reload-race=${Date.now()}`);
+    const old = send(harness.listener(), videoDiscovery(98, "old"), playbackSender(98));
+    while (!finishRule) await new Promise(resolve => setTimeout(resolve, 0));
+    harness.events.updated(98, { status: "loading" });
+    const fresh = send(harness.listener(), videoDiscovery(98, "new"), playbackSender(98));
+    finishRule(); await Promise.all([old, fresh]);
+    const state = (await send(harness.listener(), { type: "get-state", tabId: 98 })).state;
+    assert.equal(state.phase, "active"); assert.equal(state.ruleInstalled, true);
+    assert.equal(state.lastDetectedAt > 0, true);
+    assert.deepEqual(harness.sessionRules.get(1_000_098).condition.tabIds, [98]);
+    await send(harness.listener(), safeHeartbeat, playbackSender(98));
+    assert.match(harness.probeMessages.at(-1).sourceUrl, /\/new\/video/);
+  } finally { delete globalThis.chrome; }
+});
+
+test("关闭尚未完成首次测速的标签，新标签冷测速不被旧结果覆盖", async () => {
+  let finish;
+  const harness = installChrome({ probeStage: message => {
+    if (message.sourceUrl.includes("/old/")) return new Promise(resolve => { finish = resolve; });
+    return { ok: true, results: message.hosts.map(host => ({ host, ok: true, status: 206,
+      bytes: message.byteLimit, elapsedMs: host.includes("cosov") ? 10 : 80 })) };
+  } });
+  try {
+    await import(`../src/worker.js?lifecycle-late-cache=${Date.now()}`);
+    const old = send(harness.listener(), videoDiscovery(99, "old"), playbackSender(99));
+    while (!finish) await new Promise(resolve => setTimeout(resolve, 0));
+    harness.events.removed(99);
+    await send(harness.listener(), videoDiscovery(100, "new"), playbackSender(100));
+    const cache = structuredClone(harness.storage[CACHE_KEY]);
+    finish({ ok: true, results: [{ host: "upos-sz-mirroraliov.bilivideo.com", ok: true,
+      status: 206, bytes: 131072, elapsedMs: 1 }] });
+    await old;
+    assert.deepEqual(harness.storage[CACHE_KEY], cache);
+    assert.equal((await send(harness.listener(), { type: "get-state", tabId: 99 })).state, null);
+    assert.equal((await send(harness.listener(), { type: "get-state", tabId: 100 })).state.phase, "active");
+  } finally { delete globalThis.chrome; }
+});
+
+test("关闭标签立即取消独立测速下载，保留有效缓存供新标签使用", async () => {
+  const originalFetch = globalThis.fetch;
+  let captured, aborted = false;
+  const harness = installChrome({ storage: cachedFixture() });
+  globalThis.fetch = async (url, options) => {
+    captured = url;
+    return new Promise((resolve, reject) => options.signal.addEventListener("abort", () => {
+      aborted = true; reject(new DOMException("aborted", "AbortError"));
+    }, { once: true }));
+  };
+  try {
+    await import(`../src/worker.js?lifecycle-download=${Date.now()}`);
+    const cached = structuredClone(harness.storage[CACHE_KEY]);
+    const pending = send(harness.listener(), { type: "fetch-probe", probeId: "closing-probe",
+      sourceUrl: "https://origin.bilivideo.com/upgcxcode/old/video.m4s", host: "upos-sz-mirrorcosov.bilivideo.com" }, playbackSender(101));
+    while (!captured) await new Promise(resolve => setTimeout(resolve, 0));
+    harness.events.removed(101);
+    assert.equal(aborted, true);
+    assert.equal((await pending).ok, false);
+    assert.deepEqual(harness.storage[CACHE_KEY], cached);
+    await send(harness.listener(), videoDiscovery(102), playbackSender(102));
+    assert.equal(harness.probeMessages.length, 0);
+    assert.equal((await send(harness.listener(), { type: "get-state", tabId: 102 })).state.selectedHost, cached.winnerHost);
+  } finally { globalThis.fetch = originalFetch; delete globalThis.chrome; }
+});
+
+test("切回自动的设置保存尚未结束时关页，命令不重建旧状态", async () => {
+  let finish, delay = false;
+  const harness = installChrome({ storage: cachedFixture(), storageSet: value => {
+    if (delay && value.biliCdnAutoSettingsV2) { delay = false; return new Promise(resolve => { finish = resolve; }); }
+  } });
+  try {
+    await import(`../src/worker.js?lifecycle-settings-command=${Date.now()}`);
+    await send(harness.listener(), videoDiscovery(103), playbackSender(103));
+    delay = true;
+    const command = send(harness.listener(), { type: "set-settings", tabId: 103, settings: { enabled: true, mode: "auto" } });
+    while (!finish) await new Promise(resolve => setTimeout(resolve, 0));
+    harness.events.removed(103); finish(); await command;
+    assert.equal((await send(harness.listener(), { type: "get-state", tabId: 103 })).state, null);
+    assert.equal(harness.sessionRules.has(1_000_103), false);
+  } finally { delete globalThis.chrome; }
+});
 
 test("测速代理限定媒体地址、独立请求、暂停时终止在途读取", async () => {
   const harness = installChrome();

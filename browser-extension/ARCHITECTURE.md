@@ -1,6 +1,8 @@
 # Browser extension architecture
 
-Version 2.3.4 is an independent Manifest V3 implementation maintained in this repository. The numerical routing policy is frozen to the user-approved 2.2.0 baseline by `tests/baseline-policy.test.js`; correctness fixes do not imply a byte-for-byte rollback.
+Version 2.3.5 is an independent Manifest V3 implementation maintained in this repository. The numerical routing policy is frozen to the user-approved 2.2.0 baseline by `tests/baseline-policy.test.js`; correctness fixes do not imply a byte-for-byte rollback.
+
+2.3.5 guards asynchronous cache/settings reads and probe continuations by tab-state identity and generation. Cancellation invalidates a generation even while no probe is running. Per-tab rule queues ensure close/removal runs after an already-started installation; stale installation cannot mutate replacement state or start a second probe stage. Queues release their references on settlement and never serialize unrelated tabs. Closing preserves valid host-only cache so a newly injected content script can use a cached winner then verify its own actual video; cold playback benchmarks independently. Controlled lifecycle QA is distinct from natural-stall acceptance.
 
 2.3.4 recognizes video identity using pathname, part and episode rather than tracking parameters/hash. Main-player selection is shared by health monitoring and display and avoids layout reads for a single primary element. Native `playing` can complete an MSE display handoff without waiting for another metadata event. An idle playhead no longer keeps the playing beacon lit merely because no waiting event occurred; this is display-only, not a new recovery trigger.
 

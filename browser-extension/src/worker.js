@@ -24,6 +24,7 @@ const SUSTAINED_PROBE_BYTES = 1024 * 1024;
 const SUSTAINED_PROBE_TIMEOUT_MS = 9_000;
 const SUSTAINED_FINALISTS = 3;
 const tabStates = new Map();
+const ruleQueues = new Map();
 let probeHeadersReady;
 
 const ruleId = (tabId) => 1_000_000 + tabId;
@@ -127,12 +128,24 @@ async function publish(tabId) {
   chrome.tabs.sendMessage(tabId, { type: "state-update", state }).catch(() => {});
 }
 
+function queueRuleUpdate(tabId, operation) {
+  // A close/removal must finish after an already-started installation, while
+  // another tab's rules remain independent. Rejections do not poison the queue.
+  const task = (ruleQueues.get(tabId) || Promise.resolve()).catch(() => {}).then(operation);
+  ruleQueues.set(tabId, task);
+  const release = () => { if (ruleQueues.get(tabId) === task) ruleQueues.delete(tabId); };
+  task.then(release, release);
+  return task;
+}
+
 async function clearRule(tabId) {
+  const expectedState = tabStates.get(tabId);
+  const runId = expectedState?.runId;
   try {
-    await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [ruleId(tabId)] });
+    await queueRuleUpdate(tabId, () => chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [ruleId(tabId)] }));
   } catch {
     const state = tabStates.get(tabId);
-    if (state) {
+    if (state && state === expectedState && state.runId === runId) {
       state.phase = "error";
       state.lastError = "无法撤销线路规则，请在扩展管理页重新加载插件。";
       await setBadge(tabId, "error");
@@ -140,13 +153,15 @@ async function clearRule(tabId) {
     }
     throw new Error("无法撤销线路规则，请在扩展管理页重新加载插件。");
   }
-  if (tabStates.has(tabId)) tabStates.get(tabId).ruleInstalled = false;
+  if (expectedState && tabStates.get(tabId) === expectedState && expectedState.runId === runId) expectedState.ruleInstalled = false;
 }
 
 function cancelTesting(tabId) {
   const state = tabStates.get(tabId);
-  if (!state?.testing && !state?.verificationPending && !state?.probeControllers.size) return;
+  if (!state) return;
   state.runId += 1;
+  // Cache/settings reads and rule installation are also asynchronous work.
+  if (!state.testing && !state.verificationPending && !state.probeControllers.size) return;
   state.testing = null;
   state.verificationPending = false;
   for (const controller of state.probeControllers.values()) controller.abort();
@@ -178,19 +193,26 @@ async function handleProbeFetch(tabId, message) {
 }
 
 async function applyTarget(tabId, targetHost, phase = "active") {
-  const state = stateFor(tabId);
-  const rule = makeRedirectRule({
-    id: ruleId(tabId), tabId, sourceHosts: [...state.observedHosts], targetHost,
+  const state = tabStates.get(tabId);
+  if (!state) return false;
+  const runId = state.runId;
+  let rule;
+  const applied = await queueRuleUpdate(tabId, async () => {
+    if (tabStates.get(tabId) !== state || state.runId !== runId) return false;
+    rule = makeRedirectRule({ id: ruleId(tabId), tabId, sourceHosts: [...state.observedHosts], targetHost });
+    const update = { removeRuleIds: [ruleId(tabId)] };
+    if (rule) update.addRules = [rule];
+    await chrome.declarativeNetRequest.updateSessionRules(update);
+    return true;
   });
-  const update = { removeRuleIds: [ruleId(tabId)] };
-  if (rule) update.addRules = [rule];
-  await chrome.declarativeNetRequest.updateSessionRules(update);
+  if (!applied || tabStates.get(tabId) !== state || state.runId !== runId) return false;
   state.selectedHost = targetHost;
   state.ruleInstalled = Boolean(rule);
   state.appliedSourceHosts = new Set(state.observedHosts);
   state.phase = phase;
   await setBadge(tabId, phase);
   await publish(tabId);
+  return tabStates.get(tabId) === state && state.runId === runId;
 }
 
 async function probeCandidates(tabId, sourceUrl, candidates, {
@@ -200,6 +222,9 @@ async function probeCandidates(tabId, sourceUrl, candidates, {
   waitForBufferSeconds = 0,
   waitTimeoutMs = 0,
 } = {}) {
+  const state = tabStates.get(tabId);
+  if (!state) return null;
+  const runId = state.runId;
   let response;
   try {
     response = await chrome.tabs.sendMessage(tabId, {
@@ -210,12 +235,12 @@ async function probeCandidates(tabId, sourceUrl, candidates, {
       timeoutMs,
       waitForBufferSeconds,
       waitTimeoutMs,
-      startByte: stateFor(tabId).probeOffsets.get(new URL(sourceUrl).pathname) || 0,
+      startByte: state.probeOffsets.get(new URL(sourceUrl).pathname) || 0,
     });
   } catch (error) {
     response = { ok: false, error: String(error?.message || error), results: [] };
   }
-  if (response?.skipped) return null;
+  if (tabStates.get(tabId) !== state || state.runId !== runId || response?.skipped) return null;
   const rawResults = Array.isArray(response?.results) ? response.results : [];
   const byHost = new Map(rawResults
     .filter((item) => candidates.includes(String(item?.host || "").toLowerCase()))
@@ -238,7 +263,8 @@ async function probeCandidates(tabId, sourceUrl, candidates, {
 }
 
 async function benchmark(tabId, reason = "automatic") {
-  const state = stateFor(tabId);
+  const state = tabStates.get(tabId);
+  if (!state) return null;
   if (state.originalHost === BILI_AKAMAI_HOST) return null;
   if (state.testing) return state.testing;
   if (state.verificationPending) return null;
@@ -280,13 +306,14 @@ async function benchmark(tabId, reason = "automatic") {
       state.lastError = `测速没有可用节点（${reason}）`;
       state.selectedHost = "";
       await clearRule(tabId);
+      if (runId !== state.runId || tabStates.get(tabId) !== state) return null;
       await persistStateCache(state, "");
       await setBadge(tabId, "error");
       await publish(tabId);
       return null;
     }
 
-    await applyTarget(tabId, quickRanked[0].host, "testing");
+    if (!await applyTarget(tabId, quickRanked[0].host, "testing") || runId !== state.runId) return null;
     const finalists = quickRanked.slice(0, SUSTAINED_FINALISTS).map((item) => item.host);
     const sustainedResults = await probeCandidates(tabId, sourceUrl, finalists, {
       byteLimit: SUSTAINED_PROBE_BYTES,
@@ -333,9 +360,12 @@ async function benchmark(tabId, reason = "automatic") {
 }
 
 async function hydrateFromCache(tabId, settings) {
-  const state = stateFor(tabId);
+  const state = tabStates.get(tabId);
+  if (!state) return true;
+  const runId = state.runId;
   const disabled = new Set(settings.disabledHosts);
   const cache = await readBenchmarkCache();
+  if (tabStates.get(tabId) !== state || state.runId !== runId) return true;
   const results = cache.results.filter((item) => !disabled.has(item.host));
   const ranked = rankResults(results, state.originalHost);
   const winner = ranked.find((item) => item.host === cache.winnerHost) || ranked[0];
@@ -360,7 +390,9 @@ async function hydrateFromCache(tabId, settings) {
 
 async function honorMode(tabId, { forceRetest = false, backgroundBenchmark = false } = {}) {
   const state = stateFor(tabId);
+  const pendingRunId = state.runId;
   const settings = await readSettings();
+  if (tabStates.get(tabId) !== state || state.runId !== pendingRunId) return;
   const runBenchmark = (reason) => {
     const task = benchmark(tabId, reason);
     if (!backgroundBenchmark) return task;
@@ -417,6 +449,7 @@ async function honorMode(tabId, { forceRetest = false, backgroundBenchmark = fal
   if (forceRetest) return runBenchmark("manual");
   if (!state.selectedHost || !state.results.length) {
     if (!await hydrateFromCache(tabId, settings)) {
+      if (tabStates.get(tabId) !== state) return;
       // SSR may advertise a different quality/signature from the actual HD
       // player request. Keep uncached playback original until its video URL
       // is observed; cached winners still apply immediately as in 2.2.0.
@@ -559,8 +592,10 @@ function markHostFailed(state, host, reason) {
 }
 
 async function recoverFromStall(tabId, reason = "stall") {
-  const state = stateFor(tabId);
+  const state = tabStates.get(tabId);
+  if (!state) return null;
   const settings = await readSettings();
+  if (tabStates.get(tabId) !== state) return null;
   if (!settings.enabled || settings.mode !== "auto") return null;
   if (state.originalHost === BILI_AKAMAI_HOST) return null;
   cancelTesting(tabId);
@@ -572,7 +607,7 @@ async function recoverFromStall(tabId, reason = "stall") {
   const next = rankResults(state.results, state.originalHost)
     .find((item) => !state.failedHosts.has(item.host) && !disabled.has(item.host));
   if (next) {
-    await applyTarget(tabId, next.host, "active");
+    if (!await applyTarget(tabId, next.host, "active")) return null;
     await persistStateCache(state, next.host);
     chrome.tabs.sendMessage(tabId, { type: "retry-playback", reason: "stall-recovery" }).catch(() => {});
     return next;
@@ -582,7 +617,8 @@ async function recoverFromStall(tabId, reason = "stall") {
 }
 
 async function lightVerify(tabId, reason = "periodic") {
-  const state = stateFor(tabId);
+  const state = tabStates.get(tabId);
+  if (!state) return null;
   if (state.testing || state.verificationPending) return state.testing;
   const sourceUrl = state.sourceUrls.find(isMediaUrl);
   if (!sourceUrl || !state.selectedHost) return null;
@@ -592,7 +628,7 @@ async function lightVerify(tabId, reason = "periodic") {
   let settings;
   try { settings = await readSettings(); }
   finally { state.verificationPending = false; }
-  if (pendingRunId !== state.runId) return null;
+  if (tabStates.get(tabId) !== state || pendingRunId !== state.runId) return null;
   if (!settings.enabled || settings.mode !== "auto") return null;
   const disabled = new Set(settings.disabledHosts);
   const ranked = rankResults(state.results, state.originalHost)
@@ -631,12 +667,15 @@ async function lightVerify(tabId, reason = "periodic") {
     const alternative = byHost.get(backup.host);
     const shouldSwitch = shouldSwitchAfterVerification(current, alternative);
     const needsFull = !current?.ok || shouldSwitch;
-    if (shouldSwitch) await applyTarget(tabId, alternative.host, "active");
+    if (shouldSwitch) {
+      if (!await applyTarget(tabId, alternative.host, "active")) return null;
+    }
     else {
       state.phase = "active";
       await setBadge(tabId, "active");
       await publish(tabId);
     }
+    if (tabStates.get(tabId) !== state || runId !== state.runId) return null;
     await persistStateCache(state, state.selectedHost);
     return { needsFull, reason };
   })();
@@ -660,9 +699,11 @@ function activityAllowsProbe(activity) {
 }
 
 async function maybeAdaptiveMaintenance(tabId, activity) {
-  const state = stateFor(tabId);
+  const state = tabStates.get(tabId);
+  if (!state) return;
   if (state.testing || !state.sourceUrls.length || !state.selectedHost || !activityAllowsProbe(activity)) return;
   const settings = await readSettings();
+  if (tabStates.get(tabId) !== state) return;
   if (!settings.enabled || settings.mode !== "auto") return;
   const now = Date.now();
   if (state.pendingCandidateMaintenance) {
@@ -726,7 +767,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       state.selectedHost = "";
       state.failedHosts.clear();
       await clearRule(senderTabId);
+      if (tabStates.get(senderTabId) !== state) return { ok: true, cancelled: true };
       const settings = await readSettings();
+      if (tabStates.get(senderTabId) !== state) return { ok: true, cancelled: true };
       if (state.sourceUrls.length && settings.enabled && settings.mode === "auto") {
         await benchmark(senderTabId, "network-change");
       } else await honorMode(senderTabId);
@@ -738,10 +781,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return { settings: await readSettings(), state: publicTabState(tabStates.get(tabId)) };
     }
     if (message?.type === "set-settings" && Number.isInteger(tabId)) {
+      const commandState = tabStates.get(tabId);
       const settings = await writeSettings(message.settings);
       if (!settings.enabled || settings.mode !== "auto") {
         await Promise.all([...tabStates.keys()].filter((id) => id !== tabId).map((id) => honorMode(id)));
       }
+      if (commandState && tabStates.get(tabId) !== commandState) return { ok: true, settings, state: null, cancelled: true };
       await honorMode(tabId, { forceRetest: message.forceRetest === true, backgroundBenchmark: true });
       if (message.applyNow === true) {
         chrome.tabs.sendMessage(tabId, { type: "retry-playback", reason: "manual-switch" }).catch(() => {});
@@ -752,6 +797,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const state = stateFor(tabId);
       if (!state.sourceUrls.length) return { ok: false, error: "尚未发现视频请求，请先开始播放。" };
       const settings = await writeSettings({ ...await readSettings(), enabled: true, mode: "auto", manualHost: "" });
+      if (tabStates.get(tabId) !== state) return { ok: true, settings, state: null, cancelled: true };
       cancelTesting(tabId);
       state.lastTestedAt = 0;
       state.lastVerifiedAt = 0;
