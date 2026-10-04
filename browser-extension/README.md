@@ -1,4 +1,4 @@
-# Bilibili-oversea 浏览器扩展 2.3
+# Bilibili-oversea 浏览器扩展 2.3.1
 
 适用于 Chrome 111+、Edge 111+ 及兼容 Manifest V3 的 Chromium 浏览器。
 
@@ -9,11 +9,21 @@
 
 完整步骤见：<https://limitedrush.github.io/Bilibili-Oversea/browser-guide.html>
 
-1. 下载并解压 `bilibili-oversea-browser-v2.3.0.zip`。
+1. 下载并解压 `bilibili-oversea-browser-v2.3.1.zip`。
 2. Chrome 打开 `chrome://extensions`；Edge 打开 `edge://extensions`。
 3. 开启“开发者模式”，点击“加载已解压的扩展程序”。
 4. 选择解压后包含 `manifest.json` 的目录。
 5. 打开或刷新 B 站视频页面，播放几秒，再点击扩展图标查看测速结果。
+
+已安装用户：将新包解压到原扩展目录，在扩展管理页点击“重新加载”，然后刷新已有的 B 站播放页。只更新文件或重开弹窗不会更新已经运行的后台及页面脚本。首次升级会弃用旧版测速缓存，重新获取可信结果；模式与排除设置保留。
+
+## 2.3.1 修复
+
+- 在真实 Edge 工具栏弹窗中复现并修复 32px 窄条：固定根元素与主体的固有宽度为 400px，避免 `100vw` 与自动尺寸计算循环。
+- 测速改用独立后台请求，隔离播放重定向，校验实际响应节点；固定线路不再污染其他节点的测速结果。
+- 重测期间仍可暂停或切回原始；后台唤醒会无下载地重建媒体状态；换视频、离开及关闭标签页会取消旧任务。
+- 排除节点即使未出现在新测速结果中也保留“恢复”入口。
+- 可重复执行的真实弹窗验收脚本及覆盖范围见 [发布验收记录](https://github.com/LIMITEDRUSH/Bilibili-Oversea/blob/main/browser-extension/qa/ACCEPTANCE.md)。
 
 ## 2.3 更新
 
@@ -28,7 +38,7 @@
 - 只读观察 B 站 `playurl`、`window.__playinfo__` 和浏览器资源时间线，页面桥接脚本不修改播放器数据；
 - 每 10 秒进行一次无额外下载流量的页面/资源兜底扫描，用于发现 SPA 换视频和漏过的媒体请求；
 - 从当前视频带签名的真实媒体 URL 派生候选请求；
-- 在当前 B 站标签页的隔离内容脚本中保留正常播放 Referer：最多 8 个候选各读取 128 KB 初筛，再对前三名各读取最多 1 MB 复测；
+- 内容脚本负责缓冲判断与取消，后台独立读取候选；仅后台发起的候选请求添加 B 站 Referer，不修改网页请求：最多 8 个候选各请求 128 KiB 初筛，再对前三名各请求最多 1 MiB 复测；
 - 新视频立即使用三小时内的缓存最优节点；缓冲达到 12 秒后只用 256 KB 比较当前节点和最佳备用节点，此后每 15 分钟轻量复核一次；
 - 仅为当前 B 站播放标签页添加 Chrome 会话重定向规则；
 - 每 2 秒监测缓冲；低于 8 秒且持续快速下降，或经确认的 `waiting/stalled` 发生时，立即切换到下一个已验证节点并轻微回退；
@@ -39,7 +49,7 @@
 
 - `activeTab`：打开弹窗时读取当前标签页；
 - `storage`：保存模式、排除节点和本地测速缓存；
-- `declarativeNetRequestWithHostAccess`：建立仅限当前播放标签页的临时 CDN 规则；
+- `declarativeNetRequestWithHostAccess`：建立仅限当前播放标签页的临时 CDN 规则，以及仅限本扩展测速请求的 Referer 规则；
 - 主机范围仅为明确的 B 站页面、`*.bilivideo.com` 和 B 站的 `*.mcdn.bilivideo.cn` 媒体域名。
 
 不申请代理、Cookie、历史记录、`webRequest` 或 `<all_urls>` 权限，不包含遥测、广告、远程代码或后端服务。

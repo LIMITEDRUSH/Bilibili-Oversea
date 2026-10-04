@@ -1,4 +1,4 @@
-import { diagnostics, hostLabel, popupView, speedLabel } from "./popup-model.js";
+import { diagnostics, hostLabel, popupRows, popupView, speedLabel } from "./popup-model.js";
 
 const elements = Object.fromEntries([
   "enabled", "dot", "phase", "selected", "actual", "applyState", "message", "auto", "retest", "original",
@@ -28,8 +28,7 @@ function formatTime(timestamp) {
 }
 
 function renderResults() {
-  const results = Array.isArray(state?.results) ? [...state.results] : [];
-  results.sort((a, b) => Number(b.ok) - Number(a.ok) || b.kbps - a.kbps);
+  const results = popupRows(settings, state);
   elements.resultSummary.textContent = results.length
     ? results.filter((item) => item.ok && !settings.disabledHosts.includes(item.host)).length + " / " + results.length + " 可用" + (results.length > 2 ? " ↓" : "")
     : "等待数据";
@@ -65,7 +64,9 @@ function renderResults() {
     }
     const metrics = document.createElement("div");
     metrics.className = "metrics";
-    metrics.textContent = item.ok
+    metrics.textContent = item.untested
+      ? "已排除 · 恢复后参与测速"
+      : item.ok
       ? speedLabel(item.kbps) + " · 首包 " + Math.round(Number(item.ttfbMs) || 0) + " ms"
       : "不可用 · " + (item.status ? "HTTP " + item.status : "请求失败");
     metrics.title = item.ok ? (item.stage === "verify" ? "轻量复核" : item.stage === "sustained" ? "完整复测" : "初筛")
@@ -153,8 +154,10 @@ async function updateSettings(patch, applyNow = false) {
     state = response.state || state;
   } catch (error) {
     if (sequence !== commandSequence) return;
-    settings = before;
     operationError = String(error?.message || error);
+    // A setting may have been saved before a browser rule update failed.
+    // Read the actual saved state rather than showing a false rollback.
+    try { await loadState(); } catch { settings = before; }
   } finally {
     if (sequence === commandSequence) settingBusy = false;
     render();
@@ -218,6 +221,7 @@ document.addEventListener("keydown", (event) => {
 });
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === "state-updated" && message.tabId === tabId) {
+    if (!settingBusy && message.settings) settings = message.settings;
     state = message.state;
     render();
   }

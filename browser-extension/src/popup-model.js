@@ -16,6 +16,16 @@ export function speedLabel(kbps) {
   return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 1 }).format(value) + " Mbps";
 }
 
+export function popupRows(settings, state) {
+  const rows = new Map((state?.results || []).map(item => [item.host, { ...item }]));
+  for (const host of settings.disabledHosts || []) {
+    if (!rows.has(host)) rows.set(host, { host, ok: false, untested: true, kbps: 0 });
+  }
+  const disabled = new Set(settings.disabledHosts || []);
+  return [...rows.values()].sort((a, b) => Number(disabled.has(a.host)) - Number(disabled.has(b.host))
+    || Number(b.ok) - Number(a.ok) || (Number(b.kbps) || 0) - (Number(a.kbps) || 0));
+}
+
 export function diagnostics(settings, state, version) {
   const host = (value) => /^[a-z0-9.-]+\.bilivideo\.(?:com|cn)$/i.test(String(value || "")) ? value : "";
   return {
@@ -30,7 +40,8 @@ export function diagnostics(settings, state, version) {
 }
 
 export function popupView(settings, state, { supported = true, error = "" } = {}) {
-  const phase = !settings.enabled ? "paused" : state?.phase || "waiting";
+  const ruleError = state?.phase === "error" && state?.ruleInstalled === true;
+  const phase = ruleError ? "error" : !settings.enabled ? "paused" : state?.phase || "waiting";
   const title = {
     paused: "已暂停优化", waiting: "等待视频", testing: "正在寻找快线路",
     verifying: "正在复核线路", active: "自动优化中", manual: "已固定线路",
@@ -48,7 +59,8 @@ export function popupView(settings, state, { supported = true, error = "" } = {}
   }[phase] || "";
   const selected = settings.enabled ? state?.selectedHost || "" : "";
   let applied = "等待媒体请求";
-  if (!settings.enabled || settings.mode === "original") applied = "原始请求直通";
+  if (ruleError) applied = "规则仍可能生效";
+  else if (!settings.enabled || settings.mode === "original") applied = "原始请求直通";
   else if (selected) {
     applied = state.actualHost === selected ? "目标请求已确认"
       : state.ruleInstalled ? "规则已就绪"
@@ -56,7 +68,7 @@ export function popupView(settings, state, { supported = true, error = "" } = {}
   }
   return {
     phase: error ? "error" : phase,
-    title: error ? "操作未完成" : !supported ? "打开 B 站播放页" : title,
+    title: error ? "操作未完成" : !supported ? "打开 B 站播放页" : ruleError ? "规则更新未完成" : title,
     message: error || (!supported
       ? "在视频、番剧或课程播放页使用线路优化。"
       : state?.lastError || message),

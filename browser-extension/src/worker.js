@@ -13,15 +13,17 @@ import {
   shouldSwitchAfterVerification,
   uniqueHosts,
 } from "./engine.js";
+import { fetchProbe, probeReferrerRule, PROBE_REFERRER_RULE_ID } from "./network-probe.js";
 
 const SETTINGS_KEY = "biliCdnAutoSettingsV2";
-const BENCHMARK_CACHE_KEY = "biliCdnAutoBenchmarkV3";
+const BENCHMARK_CACHE_KEY = "biliCdnAutoBenchmarkV4";
 const QUICK_PROBE_BYTES = 128 * 1024;
 const QUICK_PROBE_TIMEOUT_MS = 4_500;
 const SUSTAINED_PROBE_BYTES = 1024 * 1024;
 const SUSTAINED_PROBE_TIMEOUT_MS = 9_000;
 const SUSTAINED_FINALISTS = 3;
 const tabStates = new Map();
+let probeHeadersReady;
 
 const ruleId = (tabId) => 1_000_000 + tabId;
 
@@ -47,6 +49,7 @@ function newTabState() {
     runId: 0,
     testing: null,
     verificationPending: false,
+    probeControllers: new Map(),
   };
 }
 
@@ -110,23 +113,60 @@ async function setBadge(tabId, phase) {
 }
 
 async function publish(tabId) {
+  const settings = await readSettings();
   const state = publicTabState(tabStates.get(tabId));
-  chrome.runtime.sendMessage({ type: "state-updated", tabId, state }).catch(() => {});
+  chrome.runtime.sendMessage({ type: "state-updated", tabId, settings, state }).catch(() => {});
   chrome.tabs.sendMessage(tabId, { type: "state-update", state }).catch(() => {});
 }
 
 async function clearRule(tabId) {
-  await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [ruleId(tabId)] }).catch(() => {});
+  try {
+    await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [ruleId(tabId)] });
+  } catch {
+    const state = tabStates.get(tabId);
+    if (state) {
+      state.phase = "error";
+      state.lastError = "无法撤销线路规则，请在扩展管理页重新加载插件。";
+      await setBadge(tabId, "error");
+      await publish(tabId);
+    }
+    throw new Error("无法撤销线路规则，请在扩展管理页重新加载插件。");
+  }
   if (tabStates.has(tabId)) tabStates.get(tabId).ruleInstalled = false;
 }
 
 function cancelTesting(tabId) {
   const state = tabStates.get(tabId);
-  if (!state?.testing && !state?.verificationPending) return;
+  if (!state?.testing && !state?.verificationPending && !state?.probeControllers.size) return;
   state.runId += 1;
   state.testing = null;
   state.verificationPending = false;
+  for (const controller of state.probeControllers.values()) controller.abort();
+  state.probeControllers.clear();
   chrome.tabs.sendMessage(tabId, { type: "cancel-probes" }).catch(() => {});
+}
+
+async function handleProbeFetch(tabId, message) {
+  if (!isMediaUrl(message.sourceUrl) || !isBiliVideoHost(message.host)
+    || !/^[a-z0-9-]{1,64}$/i.test(message.probeId || "")) throw new TypeError("invalid probe request");
+  const state = stateFor(tabId);
+  const controller = new AbortController();
+  const runId = state.runId;
+  state.probeControllers.get(message.probeId)?.abort();
+  state.probeControllers.set(message.probeId, controller);
+  const timeout = setTimeout(() => controller.abort(), Math.min(15_000, Math.max(1000, Number(message.timeoutMs) || 4500)));
+  try {
+    if (!probeHeadersReady) {
+      probeHeadersReady = chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [PROBE_REFERRER_RULE_ID], addRules: [probeReferrerRule(chrome.runtime.id)] });
+      probeHeadersReady.catch(() => { probeHeadersReady = null; });
+    }
+    await probeHeadersReady;
+    if (controller.signal.aborted || state.runId !== runId) return { ok: false, cancelled: true };
+    return await fetchProbe({ ...message, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+    if (state.probeControllers.get(message.probeId) === controller) state.probeControllers.delete(message.probeId);
+  }
 }
 
 async function applyTarget(tabId, targetHost, phase = "active") {
@@ -304,9 +344,22 @@ async function hydrateFromCache(tabId, settings) {
   return true;
 }
 
-async function honorMode(tabId, { forceRetest = false } = {}) {
+async function honorMode(tabId, { forceRetest = false, backgroundBenchmark = false } = {}) {
   const state = stateFor(tabId);
   const settings = await readSettings();
+  const runBenchmark = (reason) => {
+    const task = benchmark(tabId, reason);
+    if (!backgroundBenchmark) return task;
+    const runId = state.runId;
+    task.catch(async () => {
+      if (tabStates.get(tabId) !== state || state.runId !== runId) return;
+      state.phase = state.selectedHost ? "active" : "error";
+      state.lastError = "线路测试未完成，请检查网络后重测。";
+      await setBadge(tabId, state.phase);
+      await publish(tabId);
+    });
+    return null;
+  };
   if (!settings.enabled || settings.mode === "original") {
     cancelTesting(tabId);
     if (state.phase === "original" && !state.ruleInstalled) return;
@@ -331,9 +384,9 @@ async function honorMode(tabId, { forceRetest = false } = {}) {
     state.selectedHost = "";
     await clearRule(tabId);
   }
-  if (forceRetest) return benchmark(tabId, "manual");
+  if (forceRetest) return runBenchmark("manual");
   if (!state.selectedHost || !state.results.length) {
-    if (!await hydrateFromCache(tabId, settings)) return benchmark(tabId, "automatic");
+    if (!await hydrateFromCache(tabId, settings)) return runBenchmark("automatic");
     return;
   }
   if (state.phase !== "active" && state.phase !== "verifying" && state.phase !== "testing") {
@@ -529,6 +582,13 @@ async function maybeAdaptiveMaintenance(tabId, activity) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const run = async () => {
     const senderTabId = sender.tab?.id;
+    if (message?.type === "fetch-probe" && Number.isInteger(senderTabId)) {
+      return handleProbeFetch(senderTabId, message);
+    }
+    if (message?.type === "cancel-probe" && Number.isInteger(senderTabId)) {
+      tabStates.get(senderTabId)?.probeControllers.get(message.probeId)?.abort();
+      return { ok: true };
+    }
     if (message?.type === "media-discovered" && Number.isInteger(senderTabId)) {
       await rememberMedia(senderTabId, message.urls, {
         source: message.source,
@@ -542,7 +602,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (state.sourceUrls.length) {
         await honorMode(senderTabId);
         await maybeAdaptiveMaintenance(senderTabId, message.activity);
-      }
+      } else chrome.tabs.sendMessage(senderTabId, { type: "rescan" }).catch(() => {});
       return { ok: true };
     }
     if (message?.type === "page-changed" && Number.isInteger(senderTabId)) {
@@ -577,7 +637,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!settings.enabled || settings.mode !== "auto") {
         await Promise.all([...tabStates.keys()].filter((id) => id !== tabId).map((id) => honorMode(id)));
       }
-      await honorMode(tabId, { forceRetest: message.forceRetest === true });
+      await honorMode(tabId, { forceRetest: message.forceRetest === true, backgroundBenchmark: true });
       if (message.applyNow === true) {
         chrome.tabs.sendMessage(tabId, { type: "retry-playback", reason: "manual-switch" }).catch(() => {});
       }
@@ -603,14 +663,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  cancelTesting(tabId);
   tabStates.delete(tabId);
-  clearRule(tabId);
+  clearRule(tabId).catch(() => {});
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.url && !/^https:\/\/(?:www|m)\.bilibili\.com\//i.test(changeInfo.url)) {
+  // Without the broad `tabs` permission, a URL outside host access may be
+  // omitted. Loading is still observable and must clear the previous page.
+  if (changeInfo.status === "loading"
+    || (changeInfo.url && !/^https:\/\/(?:www|m)\.bilibili\.com\//i.test(changeInfo.url))) {
+    cancelTesting(tabId);
     tabStates.delete(tabId);
-    clearRule(tabId);
+    clearRule(tabId).catch(() => {});
     setBadge(tabId, "waiting");
   }
 });

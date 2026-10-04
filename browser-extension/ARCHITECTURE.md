@@ -1,14 +1,17 @@
 # Browser extension architecture
 
-Version 2.3 is an independent Manifest V3 implementation maintained in this repository.
+Version 2.3.1 is an independent Manifest V3 implementation maintained in this repository.
 
 1. `page-bridge.js` observes Bilibili play-url JSON and `window.__playinfo__` in the page main world without modifying them. It also reports History API navigation.
-2. `content.js` validates the bridge boundary, observes resource timing, performs a zero-download 10-second fallback rescan, samples playback buffer every two seconds, and performs bounded candidate probes in the Bilibili page context so the CDN receives the normal playback referrer.
+2. `content.js` validates the bridge boundary, observes resource timing, performs a zero-download 10-second fallback rescan, samples playback buffer every two seconds, and coordinates safe-buffer probe batches and cancellation. On worker wakeup it can replay this page's known media URLs without a download. Navigation clears the URL sets and filters out resource entries from the previous video.
 3. `worker.js` immediately applies a fresh cached winner, runs a 128 KB quick stage followed by a 1 MB sustained stage for up to three finalists when a full benchmark is necessary, performs 256 KB two-host verification in safe buffer windows, and owns session rules.
 4. `engine.js` contains pure URL, settings, ranking and declarative-rule functions covered by tests.
 5. `popup.*` is the glass desktop interface; `popup-model.js` derives readable status without exposing signed URLs. Mode selection reuses cached results; explicit retest requests a full benchmark.
+6. `network-probe.js` performs independent worker fetches with `credentials: omit`, bounded Range requests and stream cancellation. Tab-scoped playback redirects cannot affect these requests. A session header rule scoped to this extension's initiator ID supplies the Bilibili referrer, without new permissions or changes to page requests. A response from another host is never ranked as a successful sample for the requested host. Cache schema V4 discards potentially contaminated pre-2.3.1 probe results.
 
-Mode changes invalidate the worker run token and abort content-script fetches. Light verification cancelled by navigation or a user action cannot apply its results. Insufficient buffer is a skipped sample, not a failed CDN. Playback stalls in automatic mode cancel background probes and rotate directly to a verified backup. Pausing or choosing a nonautomatic mode applies to all known playback tabs.
+Mode changes invalidate the worker run token and abort both content coordinators and worker fetch controllers. Light verification cancelled by navigation or a user action cannot apply its results. Insufficient buffer is a skipped sample, not a failed CDN. Playback stalls in automatic mode cancel background probes and rotate directly to a verified backup. Pausing or choosing a nonautomatic mode applies to all known playback tabs. Mode-setting commands start a cold benchmark in the background so pause/original controls remain available.
+
+The native action popup uses an explicit 400px intrinsic root/body width. Do not constrain it with `max-width: 100vw`: Chromium's shrink-to-fit popup viewport can form an intrinsic-sizing feedback loop and collapse to 32px. Its shell has a 600px vertical cap and scrolls; the results list scrolls independently. `qa/real-popup-check.js` tests the actual action-popup target, not a normal browser page with an assumed viewport.
 
 `scripts/zip.mjs` creates reproducible ZIP32 archives using Node's built-in DEFLATE implementation. Entries use UTF-8 relative paths without a dot prefix. The packager publishes the archive atomically and writes a SHA-256 sidecar.
 

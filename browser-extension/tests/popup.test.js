@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { diagnostics, hostLabel, popupView, speedLabel } from "../src/popup-model.js";
+import { diagnostics, hostLabel, popupRows, popupView, speedLabel } from "../src/popup-model.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const html = fs.readFileSync(path.join(root, "src/popup.html"), "utf8");
@@ -14,6 +14,19 @@ test("弹窗固定使用无渐变的亮色界面，开关不被装饰层拦截",
   assert.match(css, /color-scheme: light/);
   assert.doesNotMatch(css, /gradient\(|color-scheme: dark|--mint/);
   assert.match(css, /\.power-track\s*\{[^}]*pointer-events: none/);
+});
+
+test("扩展弹窗提供确定的根宽度，不用 vw 或百分比上限参与自动尺寸循环", () => {
+  assert.match(css, /:root\s*\{[^}]*width: 400px;[^}]*min-width: 400px;/);
+  assert.match(css, /body\s*\{[^}]*width: 400px;[^}]*min-width: 400px;/);
+  assert.doesNotMatch(css, /max-width:\s*(?:100vw|100%)/);
+});
+
+test("撤销失败时即使总开关已关闭也不显示成功暂停或原始直通", () => {
+  const view = popupView({ enabled: false, mode: "original" }, { phase: "error", ruleInstalled: true, lastError: "无法撤销线路规则" });
+  assert.equal(view.phase, "error");
+  assert.equal(view.title, "规则更新未完成");
+  assert.equal(view.applied, "规则仍可能生效");
 });
 
 test("弹窗提供自动、重测、原始 CDN、自适应维护和教程入口", () => {
@@ -48,6 +61,18 @@ test("吞吐量以 Mbps 展示，未知主机名保留原文", () => {
   assert.equal(speedLabel(24500), "24.5 Mbps");
   assert.equal(hostLabel("upos-sz-mirrorcosov.bilivideo.com"), "腾讯云 · 海外");
   assert.equal(hostLabel("custom.bilivideo.com"), "custom.bilivideo.com");
+});
+
+test("已排除节点在重测或后台重启后仍有恢复入口，不伪造测速数据", () => {
+  const rows = popupRows({ disabledHosts: ["upos-sz-mirrorcosov.bilivideo.com"] }, null);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].untested, true);
+  assert.equal(rows[0].ok, false);
+  const ranked = popupRows({ disabledHosts: [rows[0].host] }, { results: [
+    { host: rows[0].host, ok: true, kbps: 100 }, { host: "other.bilivideo.com", ok: true, kbps: 50 },
+  ] });
+  assert.equal(ranked[0].host, "other.bilivideo.com");
+  assert.equal(ranked[1].kbps, 100);
 });
 
 test("复制诊断仅包含线路信息，不导出签名、播放地址或原始错误", () => {

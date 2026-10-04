@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const CACHE_KEY = "biliCdnAutoBenchmarkV3";
+const CACHE_KEY = "biliCdnAutoBenchmarkV4";
 
-function installChrome({ storage = {}, probeResult, probeStage } = {}) {
+function installChrome({ storage = {}, probeResult, probeStage, updateRule } = {}) {
   let messageListener;
   const ruleUpdates = [];
   const probeMessages = [];
   const tabMessages = [];
+  const broadcasts = [];
+  const events = {};
   const noopEvent = { addListener() {} };
   globalThis.chrome = {
     action: {
@@ -15,12 +17,13 @@ function installChrome({ storage = {}, probeResult, probeStage } = {}) {
       setBadgeBackgroundColor: async () => {},
     },
     declarativeNetRequest: {
-      updateSessionRules: async (update) => { ruleUpdates.push(update); },
+      updateSessionRules: async (update) => { ruleUpdates.push(update); if (updateRule) await updateRule(update); },
     },
     runtime: {
+      id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       onMessage: { addListener(listener) { messageListener = listener; } },
       onInstalled: noopEvent,
-      sendMessage: async () => {},
+      sendMessage: async message => { broadcasts.push(message); },
     },
     storage: {
       local: {
@@ -29,8 +32,8 @@ function installChrome({ storage = {}, probeResult, probeStage } = {}) {
       },
     },
     tabs: {
-      onRemoved: noopEvent,
-      onUpdated: noopEvent,
+      onRemoved: { addListener(listener) { events.removed = listener; } },
+      onUpdated: { addListener(listener) { events.updated = listener; } },
       sendMessage: async (tabId, message) => {
         tabMessages.push({ tabId, message });
         if (message.type !== "probe-candidates") return undefined;
@@ -55,9 +58,66 @@ function installChrome({ storage = {}, probeResult, probeStage } = {}) {
     ruleUpdates,
     probeMessages,
     tabMessages,
+    broadcasts,
+    events,
     listener: () => messageListener,
   };
 }
+
+test("后台无内存状态时心跳请求无下载重扫描", async () => {
+  const harness = installChrome();
+  try {
+    await import(`../src/worker.js?test=wakeup-${Date.now()}`);
+    const response = await send(harness.listener(), { type: "media-heartbeat", activity: { visible: true, paused: false } }, { tab: { id: 71 } });
+    assert.equal(response.ok, true);
+    assert.ok(harness.tabMessages.some(({ tabId, message }) => tabId === 71 && message.type === "rescan"));
+    assert.equal(harness.probeMessages.length, 0);
+  } finally { delete globalThis.chrome; }
+});
+
+test("无缓存时切回自动立即响应，测速期间仍可暂停，不锁住弹窗", async () => {
+  let finish;
+  const harness = installChrome({
+    storage: { biliCdnAutoSettingsV2: { enabled: true, mode: "original" } },
+    probeStage: () => new Promise(resolve => { finish = resolve; }),
+  });
+  try {
+    await import(`../src/worker.js?test=responsive-auto-${Date.now()}`);
+    await send(harness.listener(), { type: "media-discovered", urls: ["https://origin.bilivideo.com/upgcxcode/a/video.m4s"] }, { tab: { id: 73 } });
+    const automatic = await send(harness.listener(), { type: "set-settings", tabId: 73, settings: { enabled: true, mode: "auto" } });
+    assert.equal(automatic.ok, true);
+    while (!finish) await new Promise(resolve => setTimeout(resolve, 0));
+    const paused = await send(harness.listener(), { type: "set-settings", tabId: 73, settings: { enabled: false, mode: "auto" } });
+    assert.equal(paused.state.ruleInstalled, false);
+    finish({ ok: true, results: harness.probeMessages[0].hosts.map(host => ({ host, ok: true, status: 206, bytes: 1024, elapsedMs: 1 })) });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const final = await send(harness.listener(), { type: "get-state", tabId: 73 });
+    assert.equal(final.settings.enabled, false);
+    assert.equal(final.state.phase, "original");
+    const latest = harness.broadcasts.at(-1);
+    assert.equal(latest.settings.enabled, false);
+    assert.equal(latest.settings.mode, "auto");
+    assert.equal(latest.state.phase, "original");
+    assert.equal(harness.ruleUpdates.some(update => update.addRules?.length), false);
+  } finally { delete globalThis.chrome; }
+});
+
+for (const transition of ["removed", "updated", "loading-without-url"]) test(`标签页 ${transition} 后迟到测速不能重建状态与规则`, async () => {
+  let finish;
+  const harness = installChrome({ probeStage: () => new Promise(resolve => { finish = resolve; }) });
+  try {
+    await import(`../src/worker.js?test=tab-${transition}-${Date.now()}`);
+    const discovery = send(harness.listener(), { type: "media-discovered", urls: ["https://origin.bilivideo.com/upgcxcode/a/video.m4s"] }, { tab: { id: 72 } });
+    while (!finish) await new Promise(resolve => setTimeout(resolve, 0));
+    if (transition === "removed") harness.events.removed(72);
+    else harness.events.updated(72, transition === "updated" ? { url: "https://example.com" } : { status: "loading" });
+    finish({ ok: true, results: harness.probeMessages[0].hosts.map(host => ({ host, ok: true, status: 206, bytes: 1024, elapsedMs: 1 })) });
+    await discovery;
+    const final = await send(harness.listener(), { type: "get-state", tabId: 72 });
+    assert.equal(final.state, null);
+    assert.equal(harness.ruleUpdates.some(update => update.addRules?.length), false);
+  } finally { delete globalThis.chrome; }
+});
 
 function send(listener, message, sender = {}) {
   return new Promise((resolve) => {
@@ -65,6 +125,57 @@ function send(listener, message, sender = {}) {
     assert.equal(keepAlive, true);
   });
 }
+
+test("测速代理限定媒体地址、独立请求、暂停时终止在途读取", async () => {
+  const harness = installChrome();
+  const originalFetch = globalThis.fetch;
+  let captured;
+  let aborted = false;
+  globalThis.fetch = async (url, options) => {
+    captured = { url, options };
+    return new Promise((resolve, reject) => options.signal.addEventListener("abort", () => {
+      aborted = true;
+      reject(new DOMException("aborted", "AbortError"));
+    }, { once: true }));
+  };
+  try {
+    await import(`../src/worker.js?test=broker-${Date.now()}`);
+    const invalid = await send(harness.listener(), { type: "fetch-probe", probeId: "invalid", sourceUrl: "https://example.com/file", host: "cdn.bilivideo.com" }, { tab: { id: 74 } });
+    assert.equal(invalid.ok, false);
+    assert.match(invalid.error, /invalid probe request/);
+    assert.equal(captured, undefined);
+    const pending = send(harness.listener(), { type: "fetch-probe", probeId: "qa-1", sourceUrl: "https://origin.bilivideo.com/upgcxcode/a.m4s?token=keep", host: "cdn.bilivideo.com", byteLimit: 1024 }, { tab: { id: 74 } });
+    while (!captured) await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(captured.url, "https://cdn.bilivideo.com/upgcxcode/a.m4s?token=keep");
+    assert.equal(captured.options.credentials, "omit");
+    assert.equal(captured.options.headers.Range, "bytes=0-1023");
+    const headerRule = harness.ruleUpdates.find(update => update.addRules?.[0].action.type === "modifyHeaders").addRules[0];
+    assert.deepEqual(headerRule.condition.initiatorDomains, [chrome.runtime.id]);
+    assert.equal(headerRule.condition.tabIds, undefined);
+    await send(harness.listener(), { type: "set-settings", tabId: 74, settings: { enabled: false } });
+    assert.equal(aborted, true);
+    assert.equal((await pending).ok, false);
+  } finally { globalThis.fetch = originalFetch; delete globalThis.chrome; }
+});
+
+test("撤销规则失败会明确报错，不伪报已直通原始线路", async () => {
+  let rejectRemoval = false;
+  const harness = installChrome({ updateRule: async update => {
+    if (rejectRemoval && !update.addRules?.length) throw new Error("browser refused rule update");
+  } });
+  try {
+    await import(`../src/worker.js?test=rule-error-${Date.now()}`);
+    await send(harness.listener(), { type: "media-discovered", urls: ["https://origin.bilivideo.com/upgcxcode/a.m4s"] }, { tab: { id: 75 } });
+    rejectRemoval = true;
+    const pause = await send(harness.listener(), { type: "set-settings", tabId: 75, settings: { enabled: false } });
+    assert.equal(pause.ok, false);
+    assert.match(pause.error, /无法撤销线路规则/);
+    const actual = await send(harness.listener(), { type: "get-state", tabId: 75 });
+    assert.equal(actual.settings.enabled, false);
+    assert.equal(actual.state.phase, "error");
+    assert.equal(actual.state.ruleInstalled, true);
+  } finally { delete globalThis.chrome; }
+});
 
 test("首次媒体地址执行完整测速并缓存当前标签页规则", async () => {
   const harness = installChrome();
@@ -352,6 +463,7 @@ test("从手动模式切回自动模式时没有测速结果就立即测速", as
       tabId: 11,
       settings: { enabled: true, mode: "auto", manualHost: "", disabledHosts: [] },
     });
+    await new Promise(resolve => setTimeout(resolve, 0));
     assert.equal(harness.probeMessages.length, 2);
     const state = await send(harness.listener(), { type: "get-state", tabId: 11 });
     assert.equal(state.state.phase, "active");

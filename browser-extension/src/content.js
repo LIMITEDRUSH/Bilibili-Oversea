@@ -17,10 +17,11 @@
   const discoveredUrls = new Set();
   const observedResourceUrls = new Set();
   const seenResourceEntries = new Set();
-  const probeSuppressions = new Map();
   const bufferHistory = [];
   const probeControllers = new Set();
   let probeGeneration = 0;
+  let nextProbeId = 0;
+  let navigationResourceTime = 0;
   let activeVideo = null;
   let videoStartedAt = 0;
   let healthArmed = false;
@@ -109,46 +110,17 @@
     return target.href;
   }
 
-  async function readAtMost(response, limit) {
-    if (!response.body) return 0;
-    const reader = response.body.getReader();
-    let bytes = 0;
-    try {
-      while (bytes < limit) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        bytes += value?.byteLength || 0;
-      }
-    } finally {
-      await reader.cancel().catch(() => {});
-    }
-    return Math.min(bytes, limit);
-  }
-
   async function probe(sourceUrl, host, byteLimit, timeoutMs) {
     const controller = new AbortController();
+    const probeId = Date.now().toString(36) + "-" + (++nextProbeId);
+    controller.signal.addEventListener("abort", () => send({ type: "cancel-probe", probeId }), { once: true });
     probeControllers.add(controller);
     const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
     const started = performance.now();
     let ttfbMs = 0;
     try {
-      const targetUrl = probeUrl(sourceUrl, host);
-      const suppressions = probeSuppressions.get(targetUrl) || [];
-      suppressions.push(Date.now() + 60_000);
-      probeSuppressions.set(targetUrl, suppressions);
-      const response = await fetch(targetUrl, {
-        cache: "no-store",
-        credentials: "omit",
-        headers: { Range: `bytes=0-${byteLimit - 1}` },
-        redirect: "follow",
-        signal: controller.signal,
-      });
-      ttfbMs = performance.now() - started;
-      const bytes = response.ok ? await readAtMost(response, byteLimit) : 0;
-      return {
-        host, ok: response.ok, status: response.status, bytes,
-        elapsedMs: performance.now() - started, ttfbMs,
-      };
+      probeUrl(sourceUrl, host); // Validate before crossing the message boundary.
+      return await chrome.runtime.sendMessage({ type: "fetch-probe", sourceUrl, host, byteLimit, timeoutMs, probeId });
     } catch (error) {
       return {
         host, ok: false, status: 0, bytes: 0,
@@ -285,6 +257,7 @@
     lastStallAt = 0;
     bufferHistory.length = 0;
     video.addEventListener("waiting", () => scheduleStallCheck(video, "waiting"));
+    video.addEventListener("play", periodicDiscovery);
     video.addEventListener("stalled", () => scheduleStallCheck(video, "stalled"));
     video.addEventListener("seeking", () => {
       lastSeekAt = Date.now();
@@ -304,6 +277,9 @@
     lastUrl = url;
     cancelProbes();
     discoveredUrls.clear();
+    observedResourceUrls.clear();
+    seenResourceEntries.clear();
+    navigationResourceTime = performance.now();
     bufferHistory.length = 0;
     videoStartedAt = Date.now();
     healthArmed = false;
@@ -315,17 +291,11 @@
     const urls = [];
     for (const entry of entries) {
       const name = String(entry?.name || "");
+      if (Number(entry.startTime) < navigationResourceTime) continue;
       if (!isMediaUrl(name)) continue;
       const key = `${name}\n${Number(entry.startTime) || 0}\n${Number(entry.duration) || 0}\n${entry.initiatorType || ""}`;
       if (seenResourceEntries.has(key)) continue;
       seenResourceEntries.add(key);
-      const suppressions = (probeSuppressions.get(name) || []).filter((expiresAt) => expiresAt > Date.now());
-      if (suppressions.length) {
-        suppressions.shift();
-        if (suppressions.length) probeSuppressions.set(name, suppressions);
-        else probeSuppressions.delete(name);
-        continue;
-      }
       urls.push(name);
     }
     reportUrls(urls, "performance", true);
@@ -366,6 +336,12 @@
       return false;
     }
     if (message?.type === "rescan") {
+      // MV3 workers can sleep while the page stays open. Replay known media
+      // without downloading or reclassifying resources from older videos.
+      for (const [known, observed] of [[discoveredUrls, false], [observedResourceUrls, true]]) {
+        const urls = sanitizeUrls([...known].reverse());
+        if (urls.length) send({ type: "media-discovered", urls, observed, source: "rescan-cache", pageUrl: location.href, connection: connectionHint() });
+      }
       periodicDiscovery();
       return false;
     }

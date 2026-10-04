@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const source = fs.readFileSync(path.join(root, "src/content.js"), "utf8");
 
-test("媒体测速在页面内容上下文中保留正常 Referer 策略", async () => {
+test("页面仅协调缓冲与取消，媒体测速交给独立后台请求", async () => {
   let messageListener;
   const requests = [];
   const intervals = [];
@@ -25,6 +25,7 @@ test("媒体测速在页面内容上下文中保留正常 Referer 策略", async
   };
   let resourceEntries = [];
   let hangingProbe = false;
+  const brokerControllers = new Map();
   const window = {
     addEventListener(type, listener) { windowListeners.set(type, listener); },
     postMessage() {},
@@ -39,7 +40,18 @@ test("媒体测速在页面内容上下文中保留正常 Referer 策略", async
       runtime: {
         getManifest() { return { version: "2.2.0" }; },
         onMessage: { addListener(listener) { messageListener = listener; } },
-        sendMessage: async (message) => { sentMessages.push(message); },
+        sendMessage: async (message) => {
+          sentMessages.push(message);
+          if (message.type === "cancel-probe") { brokerControllers.get(message.probeId)?.abort(); return { ok: true }; }
+          if (message.type !== "fetch-probe") return undefined;
+          const controller = new AbortController();
+          brokerControllers.set(message.probeId, controller);
+          const target = new URL(message.sourceUrl);
+          target.hostname = message.host;
+          requests.push({ url: target.href, options: { headers: { Range: `bytes=0-${message.byteLimit-1}` }, signal: controller.signal } });
+          if (hangingProbe) return new Promise(resolve => controller.signal.addEventListener("abort", () => resolve({ host: message.host, ok: false })));
+          return { host: message.host, ok: true, status: 206, bytes: message.byteLimit, elapsedMs: 10, ttfbMs: 1 };
+        },
       },
     },
     document: {
@@ -48,13 +60,7 @@ test("媒体测速在页面内容上下文中保留正常 Referer 策略", async
       hidden: false,
       querySelector() { return null; },
     },
-    fetch: async (url, options) => {
-      requests.push({ url, options });
-      if (hangingProbe) return new Promise((_resolve, reject) => {
-        options.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
-      });
-      return new Response(new Uint8Array(2_048), { status: 206 });
-    },
+    fetch: async () => { throw new Error("Content scripts must not fetch candidate media"); },
     location: { href: "https://www.bilibili.com/video/BV1", origin: "https://www.bilibili.com" },
     MutationObserver: class { observe() {} },
     navigator: { onLine: true, connection },
@@ -96,12 +102,22 @@ test("媒体测速在页面内容上下文中保留正常 Referer 策略", async
   const probeResource = requests[0].url;
   resourceEntries = [{ name: probeResource, startTime: 1, duration: 1, initiatorType: "fetch" }];
   intervals.find((item) => item.delay === 10_000).callback();
-  assert.equal(sentMessages.some((message) => message.observed === true), false);
+  // Background probes do not create page timing entries. An entry with the
+  // same URL here therefore belongs to real playback and must be reported.
+  assert.equal(sentMessages.some((message) => message.observed === true), true);
   resourceEntries = [...resourceEntries, {
     name: probeResource, startTime: 2, duration: 2, initiatorType: "xmlhttprequest",
   }];
   intervals.find((item) => item.delay === 10_000).callback();
   assert.equal(sentMessages.some((message) => message.observed === true), true);
+
+  const beforeReplay = sentMessages.length;
+  messageListener({ type: "rescan" }, {}, () => {});
+  const replay = sentMessages.slice(beforeReplay).filter(message => message.source === "rescan-cache");
+  assert.equal(replay.length, 1);
+  assert.equal(replay[0].observed, true);
+  assert.equal(replay[0].urls[0], probeResource);
+  assert.equal(requests.length, 1); // Recovery itself downloads no media.
 
   connection.rtt = 80;
   connection.downlink = 5;
@@ -125,6 +141,19 @@ test("媒体测速在页面内容上下文中保留正常 Referer 策略", async
   assert.equal(requests.at(-1).options.signal.aborted, true);
   assert.equal(cancelled.skipped, true);
   assert.equal(cancelled.results.length, 0);
+
+  const beforeNavigation = sentMessages.length;
+  context.location.href = "https://www.bilibili.com/video/BV2";
+  windowListeners.get("popstate")();
+  messageListener({ type: "rescan" }, {}, () => {});
+  assert.equal(sentMessages.slice(beforeNavigation).some(message => message.source === "rescan-cache"), false);
+  const currentResource = "https://new.bilivideo.com/upgcxcode/b/video.m4s";
+  resourceEntries.push({ name: currentResource, startTime: performance.now() + 1, duration: 1 });
+  intervals.find(item => item.delay === 10_000).callback();
+  const nextReports = sentMessages.slice(beforeNavigation).filter(message => message.type === "media-discovered");
+  assert.equal(nextReports.length, 1);
+  assert.deepEqual(Array.from(nextReports[0].urls), [currentResource]);
+  assert.equal(requests.length, 2); // SPA recovery itself performs no downloads.
 });
 
 test("每两秒监测缓冲并在低于八秒且快速下降时提前恢复", () => {
