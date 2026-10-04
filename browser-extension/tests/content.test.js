@@ -223,3 +223,34 @@ test("每两秒监测缓冲并在低于八秒且快速下降时提前恢复", ()
     message.type === "playback-stall" && message.reason === "buffer-low"
   )), true);
 });
+
+test("恢复触发的 seek 卡住时继续轮换，用户操作取消该看门狗",()=>{
+  const messages=[],timers=new Map(),events=new Map(),documentEvents=new Map();
+  let listener,clock=10000,nextId=1;
+  const video={currentTime:10,duration:600,paused:false,ended:false,seeking:false,
+    buffered:{length:1,start:()=>0,end:()=>video.currentTime},addEventListener(){}};
+  const window={addEventListener:(name,fn)=>events.set(name,fn),postMessage(){},
+    setInterval:()=>1,setTimeout:(fn,delay)=>{const id=nextId++;timers.set(id,{fn:()=>{timers.delete(id);fn();},delay});return id;},clearTimeout:id=>timers.delete(id)};
+  class ClockDate extends Date{static now(){return clock;}}
+  vm.runInContext(source,vm.createContext({window,Date:ClockDate,location:{href:"https://www.bilibili.com/video/BVHD",origin:"https://www.bilibili.com"},
+    document:{hidden:false,documentElement:{dataset:{}},querySelector:()=>video,addEventListener:(name,fn)=>documentEvents.set(name,fn)},
+    navigator:{onLine:true},MutationObserver:class{observe(){}},performance:{getEntriesByType:()=>[]},
+    chrome:{runtime:{getManifest:()=>({version:"2.3.2"}),sendMessage:async message=>messages.push(message),onMessage:{addListener:fn=>listener=fn}}},
+    AbortController,URL,Map,Set,String,Array,Object,Promise}));
+  documentEvents.get("DOMContentLoaded")();
+  let reply;listener({type:"retry-playback"},{},result=>reply=result);
+  assert.equal(reply.retried,true);
+  video.seeking=true;clock+=8001;
+  const timeout=[...timers.values()].find(t=>t.delay===8001);assert.ok(timeout);timeout.fn();
+  assert.ok(messages.some(m=>m.type==="playback-stall"&&m.reason==="recovery-timeout"));
+  // The next candidate can re-arm recovery while our own seek is still stuck.
+  listener({type:"retry-playback"},{},result=>reply=result);
+  assert.equal(reply.retried,true);
+  assert.equal([...timers.values()].filter(t=>t.delay===8001).length,1);
+  events.get("pointerdown")();assert.equal(timers.size,0);
+  listener({type:"retry-playback"},{},result=>reply=result);
+  assert.equal(reply.retried,false); // Never override a user-controlled seek.
+  video.seeking=false;
+  video.currentTime=0;listener({type:"retry-playback"},{},result=>reply=result);
+  assert.equal(reply.retried,true);assert.equal(video.currentTime,0.001);
+});

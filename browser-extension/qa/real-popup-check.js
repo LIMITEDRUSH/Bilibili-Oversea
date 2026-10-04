@@ -81,6 +81,14 @@ async (page) => {
     await click('#auto');
     await wait(`!document.querySelector('#auto').disabled && document.querySelector('#auto').getAttribute('aria-pressed')==='true'`);
     await layout('Auto layout');
+    const passthrough = await evaluate(`(async()=>{const [tab]=await chrome.tabs.query({active:true,currentWindow:true});return (await chrome.runtime.sendMessage({type:'get-state',tabId:tab.id})).state?.passthroughReason})()`);
+    if (passthrough === 'baseline-akamai') {
+      check('Akamai native passthrough is explicit',await evaluate(`document.querySelector('#phase').textContent==='使用原始 CDN' && document.querySelector('#message').textContent.includes('2.2.0') && document.querySelector('#applyState').textContent==='原始请求直通'`));
+      check('Akamai does not offer an ineffective retest',await evaluate(`document.querySelector('#retest').disabled`));
+      check('Akamai empty state does not promise automatic benchmarking',await evaluate(`document.querySelector('#results').textContent.includes('不做候选测速') && document.querySelector('#refresh').textContent==='当前视频 · 原始直通'`));
+      const nativeRules=await worker.evaluate(()=>chrome.declarativeNetRequest.getSessionRules());
+      check('Akamai automatic mode installs no playback redirect',!nativeRules.some(rule=>rule.action.type==='redirect'));
+    } else {
     await wait(`Array.from(document.querySelectorAll('button[data-action-key]')).some(b=>b.dataset.actionKey.startsWith('use:') && !b.disabled)`);
     const originalHost = await evaluate(`(async()=>{const [tab]=await chrome.tabs.query({active:true,currentWindow:true});return (await chrome.runtime.sendMessage({type:'get-state',tabId:tab.id})).state.originalHost})()`);
     const fixedKey = await evaluate(`(()=>{const buttons=Array.from(document.querySelectorAll('button[data-action-key]')).filter(b=>b.dataset.actionKey.startsWith('use:')&&!b.disabled);return (buttons.find(b=>b.dataset.actionKey.slice(4)!==${JSON.stringify(originalHost)})||buttons[0]).dataset.actionKey})()`);
@@ -110,6 +118,7 @@ async (page) => {
     const cancelledRules = await worker.evaluate(() => chrome.declarativeNetRequest.getSessionRules());
     check('Cancelled retest cannot reinstall playback redirects',!cancelledRules.some(rule=>rule.action.type==='redirect'));
     await layout('Cancelled retest layout');
+    }
     await evaluate(`Object.defineProperty(navigator.clipboard,'writeText',{configurable:true,value:async value=>{window.qaDiagnostics=JSON.parse(value)}})`);
     await click('#copyDiagnostics');
     const copied=await evaluate(`({label:document.querySelector('#copyDiagnostics').textContent,version:window.qaDiagnostics?.version,hasUrls:JSON.stringify(window.qaDiagnostics).includes('https://')})`);
@@ -120,6 +129,11 @@ async (page) => {
     await layout('Controlled error and long-domain fixture');
     const scrolling = await evaluate(`(()=>{const list=document.querySelector('#results');list.scrollTop=list.scrollHeight;return {rows:list.children.length,scrollable:list.scrollHeight>list.clientHeight,lastVisible:list.lastElementChild.getBoundingClientRect().bottom<=list.getBoundingClientRect().bottom+2}})()`);
     check('Eight-node fixture scrolls to final row',scrolling.rows===8 && scrolling.scrollable && scrolling.lastVisible,scrolling);
+    // UI-only boundary fixture; no media request, measurement or rule is faked.
+    await worker.evaluate(async tabId=>chrome.runtime.sendMessage({type:'state-updated',tabId,settings:{enabled:true,mode:'auto',manualHost:'',disabledHosts:[]},state:{phase:'original',passthroughReason:'baseline-akamai',actualHost:'upos-hz-mirrorakam.akamaized.net',originalHost:'upos-hz-mirrorakam.akamaized.net',sourceKind:'video',ruleInstalled:false,lastDetectedAt:Date.now(),results:[]}}).catch(()=>{}),currentTabId);
+    await wait(`document.querySelector('#message').textContent.includes('2.2.0')`);
+    check('Controlled Akamai UI fixture has truthful empty state',await evaluate(`document.querySelector('#results').textContent.includes('不做候选测速') && document.querySelector('#refresh').textContent==='当前视频 · 原始直通'`));
+    check('Controlled Akamai UI fixture disables ineffective retest',await evaluate(`document.querySelector('#retest').disabled && document.querySelector('#applyState').textContent==='原始请求直通'`));
     await open();
     await layout('Real state restored after fixture');
     await evaluate(`(async()=>chrome.runtime.sendMessage({type:'set-settings',tabId:(await chrome.tabs.query({active:true,currentWindow:true}))[0].id,settings:{enabled:true,mode:'auto',manualHost:'',disabledHosts:[]}}))()`);

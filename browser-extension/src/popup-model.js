@@ -1,3 +1,5 @@
+import { isBiliMediaHost } from "./engine.js";
+
 const hostNames = [
   ["mirrorali", "阿里云"], ["mirrorcos", "腾讯云"], ["mirrorhw", "华为云"],
   ["mirrorakam", "Akamai"], ["mcdn", "B 站边缘"],
@@ -27,10 +29,11 @@ export function popupRows(settings, state) {
 }
 
 export function diagnostics(settings, state, version) {
-  const host = (value) => /^[a-z0-9.-]+\.bilivideo\.(?:com|cn)$/i.test(String(value || "")) ? value : "";
+  const host = (value) => isBiliMediaHost(value) ? value : "";
   return {
     version, enabled: settings.enabled, mode: settings.mode, phase: state?.phase || "waiting",
     selectedHost: host(state?.selectedHost), actualHost: host(state?.actualHost),
+    sourceKind: ["video", "audio"].includes(state?.sourceKind) ? state.sourceKind : "unknown",
     ruleInstalled: state?.ruleInstalled === true,
     results: (state?.results || []).map((item) => ({
       host: host(item.host), ok: item.ok === true, kbps: Number(item.kbps) || 0,
@@ -41,6 +44,8 @@ export function diagnostics(settings, state, version) {
 
 export function popupView(settings, state, { supported = true, error = "" } = {}) {
   const ruleError = state?.phase === "error" && state?.ruleInstalled === true;
+  const baselinePassthrough = settings.enabled && settings.mode !== "original"
+    && state?.passthroughReason === "baseline-akamai";
   const phase = ruleError ? "error" : !settings.enabled ? "paused" : state?.phase || "waiting";
   const title = {
     paused: "已暂停优化", waiting: "等待视频", testing: "正在寻找快线路",
@@ -60,7 +65,7 @@ export function popupView(settings, state, { supported = true, error = "" } = {}
   const selected = settings.enabled ? state?.selectedHost || "" : "";
   let applied = "等待媒体请求";
   if (ruleError) applied = "规则仍可能生效";
-  else if (!settings.enabled || settings.mode === "original") applied = "原始请求直通";
+  else if (!settings.enabled || settings.mode === "original" || baselinePassthrough) applied = "原始请求直通";
   else if (selected) {
     applied = state.actualHost === selected ? "目标请求已确认"
       : state.ruleInstalled ? "规则已就绪"
@@ -71,10 +76,10 @@ export function popupView(settings, state, { supported = true, error = "" } = {}
     title: error ? "操作未完成" : !supported ? "打开 B 站播放页" : ruleError ? "规则更新未完成" : title,
     message: error || (!supported
       ? "在视频、番剧或课程播放页使用线路优化。"
-      : state?.lastError || message),
+      : state?.lastError || (baselinePassthrough ? "此视频使用 Akamai，保持 2.2.0 原始直通，不跨 CDN 改道。" : message)),
     applied,
     selected,
     busy: phase === "testing" || phase === "verifying",
-    canRetest: supported && settings.enabled && Boolean(state?.lastDetectedAt),
+    canRetest: supported && settings.enabled && !baselinePassthrough && Boolean(state?.lastDetectedAt),
   };
 }

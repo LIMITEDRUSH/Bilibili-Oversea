@@ -57,6 +57,14 @@ test("错误、规则就绪、已确认请求与固定模式分别展示", () =>
   assert.equal(popupView({ ...settings, mode: "original" }, state).applied, "原始请求直通");
 });
 
+test("Akamai 直通准确显示工作边界，不伪报优化或开放无效重测",()=>{
+  const view=popupView({enabled:true,mode:"auto"},{phase:"original",passthroughReason:"baseline-akamai",lastDetectedAt:1});
+  assert.equal(view.title,"使用原始 CDN");assert.equal(view.applied,"原始请求直通");
+  assert.equal(view.canRetest,false);assert.match(view.message,/2\.2\.0.*不跨 CDN/);
+  const popup=fs.readFileSync(path.join(root,"src/popup.js"),"utf8");
+  assert.match(popup,/const signature = JSON\.stringify\(\[results, state\?\.selectedHost, state\?\.passthroughReason/);
+});
+
 test("吞吐量以 Mbps 展示，未知主机名保留原文", () => {
   assert.equal(speedLabel(24500), "24.5 Mbps");
   assert.equal(hostLabel("upos-sz-mirrorcosov.bilivideo.com"), "腾讯云 · 海外");

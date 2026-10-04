@@ -1,12 +1,26 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  ADAPTIVE_POLICY, isBiliMediaHost, isBiliVideoHost, isMediaUrl, makeRedirectRule, rankResults,
+  ADAPTIVE_POLICY, BILI_AKAMAI_HOST, isCdnTargetHost, isBiliMediaHost, isBiliVideoHost, isMediaUrl, makeRedirectRule, rankResults,
   replaceMediaHost, resultFromTiming, sanitizeBenchmarkCache, sanitizeSettings,
   shouldSwitchAfterVerification, uniqueHosts,
 } from "../src/engine.js";
 
 const media = "https://upos-sz-mirroraliov.bilivideo.com/upgcxcode/12/34/video.m4s?deadline=9&token=abc";
+
+test("Akamai 仅观察专用 B 站主机，保持 2.2.0 直通而不跨 CDN 改道", () => {
+  const original = `https://${BILI_AKAMAI_HOST}/upgcxcode/12/34/video.m4s?deadline=9&token=keep`;
+  assert.equal(isMediaUrl(original), true);
+  assert.equal(isCdnTargetHost(BILI_AKAMAI_HOST), false);
+  assert.equal(isBiliMediaHost("other.akamaized.net"), false);
+  assert.equal(isMediaUrl(`https://${BILI_AKAMAI_HOST}/unrelated/file`), false);
+  assert.equal(isMediaUrl(`https://${BILI_AKAMAI_HOST}.evil.test/upgcxcode/a.m4s`), false);
+  const rewritten = new URL(replaceMediaHost(original, "target.bilivideo.com"));
+  assert.equal(rewritten.search, "?deadline=9&token=keep");
+  assert.equal(makeRedirectRule({ id: 101, tabId: 7, sourceHosts: [BILI_AKAMAI_HOST], targetHost: "target.bilivideo.com" }),null);
+  assert.deepEqual(rankResults([{host:BILI_AKAMAI_HOST,ok:true,kbps:10000,ttfbMs:20}]),[]);
+  assert.equal(sanitizeSettings({mode:"manual",manualHost:BILI_AKAMAI_HOST}).manualHost,"");
+});
 
 test("只接受 bilivideo.com 的合法子域名", () => {
   assert.equal(isBiliVideoHost("upos-a.bilivideo.com"), true);

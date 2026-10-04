@@ -1,13 +1,13 @@
 # Chrome / Edge 浏览器插件完整教程
 
 Bilibili-oversea 2.3 是本项目独立实现的 Manifest V3 扩展。它只在 B 站播放页观察媒体地址，在本机对候选
-`bilivideo.com` CDN 做小流量 Range 测速，并为当前播放标签页建立临时重定向规则。
+受支持的 B 站 CDN 做小流量 Range 测速，并为当前播放标签页建立临时重定向规则。2.3.2 固定 2.2.0 的选路参数，保留独立测速与取消等正确性修复。
 
 ## 1. 下载
 
 打开安装页：<https://limitedrush.github.io/Bilibili-Oversea/>
 
-点击“下载 Chrome / Edge 扩展”，得到 `bilibili-oversea-browser-v2.3.0.zip`。压缩包根目录直接包含 manifest.json；同目录的 .zip.sha256 文件可用于核对传输是否完整。
+点击“下载 Chrome / Edge 扩展”，得到 `bilibili-oversea-browser-v2.3.2.zip`。压缩包根目录直接包含 manifest.json；同目录的 .zip.sha256 文件可用于核对传输是否完整。
 
 浏览器不能直接加载 ZIP。先在文件管理器中把它完整解压到一个不会随手删除的目录，例如
 `Documents/BiliCDNAuto`。打开该目录后应直接看到 `manifest.json`、`src` 和 `assets`。
@@ -18,7 +18,7 @@ Bilibili-oversea 2.3 是本项目独立实现的 Manifest V3 扩展。它只在 
 2. 打开页面右上角的“开发者模式”。
 3. 点击“加载已解压的扩展程序”。
 4. 选择刚才解压且直接包含 `manifest.json` 的目录。
-5. 列表中出现 `Bilibili-oversea 2.3.0` 和播放三角/蓝色线路箭头图标，即安装成功。
+5. 列表中出现 `Bilibili-oversea 2.3.2` 和播放三角/蓝色线路箭头图标，即安装成功。
 
 ## 3. 安装到 Edge
 
@@ -41,7 +41,7 @@ Bilibili-oversea 2.3 是本项目独立实现的 Manifest V3 扩展。它只在 
 2. 如果安装扩展之前已经打开了页面，先刷新一次。
 3. 开始播放视频；插件会立即监听播放接口，并每 10 秒做一次不下载媒体数据的兜底扫描。
 4. 点击工具栏中的 Bilibili-oversea 图标。
-5. 有缓存时直接显示“自动优化中”；没有缓存时先初筛线路，并在安全缓冲后完整复测。
+5. 有缓存时直接使用缓存线路；没有缓存时先原始直通，发现实际视频地址后初筛，并在安全缓冲后复测。仅发现 DASH 预告地址时不抢先测另一档画质。
 
 工具栏角标含义：`…` 正在测速，`A` 自动模式，`M` 固定节点，`—` 原始 CDN，`!` 测速失败。
 
@@ -66,6 +66,8 @@ Bilibili-oversea 2.3 是本项目独立实现的 Manifest V3 扩展。它只在 
 3. 状态为“自动优化中”或“已固定线路”；
 4. 缓冲低于 8 秒且持续快速下降，或发生经确认的 `waiting/stalled` 后，插件会立即尝试下一个已验证节点。
 
+若实际视频使用 Akamai，弹窗会明确显示“原始直通”，不再用音频节点冒充视频已经优化。这保留 2.2.0 的工作范围；该视频不会跨 CDN 改道，重测按钮禁用。
+
 为了避免已缓存内容影响判断，测试时可拖到尚未播放的位置，或换一个之前没打开过的视频。
 
 ## 8. 更新插件
@@ -75,6 +77,8 @@ Bilibili-oversea 2.3 是本项目独立实现的 Manifest V3 扩展。它只在 
 3. 重新打开 `chrome://extensions` 或 `edge://extensions`。
 4. 在 Bilibili-oversea 卡片上点击刷新图标。
 5. 刷新已经打开的 B 站页面。
+
+只覆盖文件或重新打开弹窗不能更新已经运行的脚本。2.3.2 不增加主机权限；首次升级清除旧测量缓存，模式与排除设置保留。
 
 ## 9. 常见问题
 
@@ -115,6 +119,6 @@ Bilibili-oversea 2.3 是本项目独立实现的 Manifest V3 扩展。它只在 
 - 完整媒体 URL 只保存在后台内存；
 - 完整测速最多对 8 个候选各读取 128 KB 初筛，再对前三名各读取最多 1 MB 复测，理论上限约 4 MB；
 - 新视频和每 15 分钟的轻量复核只比较两个节点，各读取最多 256 KB，并且要求至少 12 秒安全缓冲；
-- 权限范围只覆盖明确的 B 站播放页面、`*.bilivideo.com` 和 `*.mcdn.bilivideo.cn` 媒体域名。
+- 权限范围只覆盖明确的 B 站页面、`*.bilivideo.com` 和 `*.mcdn.bilivideo.cn`，不增加 Akamai 权限。运行时另限制媒体路径。
 
 源码架构见 [`browser-extension/ARCHITECTURE.md`](../browser-extension/ARCHITECTURE.md)。

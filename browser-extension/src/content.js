@@ -16,8 +16,11 @@
   const MAX_PROBE_TIMEOUT_MS = 15_000;
   const discoveredUrls = new Set();
   const observedResourceUrls = new Set();
+  const observedResponseUrls = new Set();
   const seenResourceEntries = new Set();
   const bufferHistory = [];
+  const trackKinds = new Map();
+  const mediaOriginals = new Map();
   const probeControllers = new Set();
   let probeGeneration = 0;
   let nextProbeId = 0;
@@ -29,6 +32,8 @@
   let lastStallAt = 0;
   let stallTimer = 0;
   let healthTimer = 0;
+  let recoveryTimer = 0;
+  let recoveryVideo = null;
   let lastUrl = location.href;
 
   function writeDiagnostics(state = null) {
@@ -70,7 +75,8 @@
   function isMediaHost(host) {
     const value = String(host || "").toLowerCase();
     return /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+bilivideo\.com$/.test(value)
-      || /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+mcdn\.bilivideo\.cn$/.test(value);
+      || /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+mcdn\.bilivideo\.cn$/.test(value)
+      || value === "upos-hz-mirrorakam.akamaized.net";
   }
 
   function isMediaUrl(value) {
@@ -85,11 +91,13 @@
   }
 
   function sanitizeUrls(values) {
-    return [...new Set((Array.isArray(values) ? values : []).filter(isMediaUrl))].slice(0, 8);
+    const weight = url => ({ video: 0, audio: 2 }[trackKinds.get(new URL(url).pathname)] ?? 1);
+    return [...new Set((Array.isArray(values) ? values : []).filter(isMediaUrl))]
+      .sort((left, right) => weight(left) - weight(right)).slice(0, 8);
   }
 
   function reportUrls(values, source, observed = false) {
-    const known = observed ? observedResourceUrls : discoveredUrls;
+    const known = source === "page-response" ? observedResponseUrls : observed ? observedResourceUrls : discoveredUrls;
     const urls = sanitizeUrls(values).filter((value) => !known.has(value));
     if (!urls.length) return;
     for (const value of urls) known.add(value);
@@ -98,6 +106,8 @@
       urls,
       source,
       observed,
+      tracks: urls.map(url => ({ url, kind: trackKinds.get(new URL(url).pathname) || "unknown" })),
+      originals: source === "page-response" ? urls.map(url => mediaOriginals.get(url)).filter(Boolean) : [],
       pageUrl: location.href,
       connection: connectionHint(),
     });
@@ -110,7 +120,7 @@
     return target.href;
   }
 
-  async function probe(sourceUrl, host, byteLimit, timeoutMs) {
+  async function probe(sourceUrl, host, byteLimit, timeoutMs, startByte = 0) {
     const controller = new AbortController();
     const probeId = Date.now().toString(36) + "-" + (++nextProbeId);
     controller.signal.addEventListener("abort", () => send({ type: "cancel-probe", probeId }), { once: true });
@@ -120,7 +130,7 @@
     let ttfbMs = 0;
     try {
       probeUrl(sourceUrl, host); // Validate before crossing the message boundary.
-      return await chrome.runtime.sendMessage({ type: "fetch-probe", sourceUrl, host, byteLimit, timeoutMs, probeId });
+      return await chrome.runtime.sendMessage({ type: "fetch-probe", sourceUrl, host, byteLimit, timeoutMs, probeId, startByte });
     } catch (error) {
       return {
         host, ok: false, status: 0, bytes: 0,
@@ -171,7 +181,8 @@
       || generation !== probeGeneration) {
       return { ok: false, skipped: true, error: "safe buffer unavailable", results: [] };
     }
-    const results = await Promise.all(hosts.map((host) => probe(sourceUrl, host, byteLimit, timeoutMs)));
+    const startByte = Number.isSafeInteger(message?.startByte) && message.startByte >= 0 && message.startByte <= 2 ** 40 ? message.startByte : 0;
+    const results = await Promise.all(hosts.map((host) => probe(sourceUrl, host, byteLimit, timeoutMs, startByte)));
     if (generation !== probeGeneration) return { ok: false, skipped: true, results: [] };
     return { ok: true, results };
   }
@@ -240,17 +251,32 @@
 
   function retryPlayback() {
     const video = activeVideo;
-    if (!video || video.ended || video.seeking || !Number.isFinite(video.currentTime)) return false;
-    if (video.currentTime > 0.2) {
-      video.currentTime = Math.max(0, video.currentTime - 0.15);
-      return true;
-    }
-    return false;
+    if (!video || video.ended || (video.seeking && recoveryVideo !== video) || !Number.isFinite(video.currentTime)) return false;
+    if (video.currentTime > 0.2) video.currentTime = Math.max(0, video.currentTime - 0.15);
+    else if (Number.isFinite(video.duration) && video.duration > 0) video.currentTime = Math.min(0.001, video.duration / 2);
+    else return false;
+    clearRecoveryWatchdog();
+    recoveryVideo = video;
+    // A recovery-triggered seek can itself hang on the failed request. Do not
+    // let `seeking` suppress all recovery forever; use the existing cooldown.
+    recoveryTimer = window.setTimeout(() => {
+      recoveryTimer = 0;
+      if (video === activeVideo && !document.hidden && !video.paused && !video.ended
+        && bufferedAhead(video) < 0.5) reportStall("recovery-timeout");
+    }, STALL_COOLDOWN_MS + 1);
+    return true;
+  }
+
+  function clearRecoveryWatchdog() {
+    window.clearTimeout(recoveryTimer);
+    recoveryTimer = 0;
+    recoveryVideo = null;
   }
 
   function watchVideo(video) {
     if (video === activeVideo) return;
     activeVideo = video;
+    clearRecoveryWatchdog();
     videoStartedAt = Date.now();
     healthArmed = false;
     lastSeekAt = 0;
@@ -259,6 +285,7 @@
     video.addEventListener("waiting", () => scheduleStallCheck(video, "waiting"));
     video.addEventListener("play", periodicDiscovery);
     video.addEventListener("stalled", () => scheduleStallCheck(video, "stalled"));
+    video.addEventListener("playing", clearRecoveryWatchdog);
     video.addEventListener("seeking", () => {
       lastSeekAt = Date.now();
       bufferHistory.length = 0;
@@ -276,8 +303,12 @@
     if (url === lastUrl) return;
     lastUrl = url;
     cancelProbes();
+    clearRecoveryWatchdog();
     discoveredUrls.clear();
+    trackKinds.clear();
+    mediaOriginals.clear();
     observedResourceUrls.clear();
+    observedResponseUrls.clear();
     seenResourceEntries.clear();
     navigationResourceTime = performance.now();
     bufferHistory.length = 0;
@@ -323,7 +354,25 @@
   window.addEventListener("message", (event) => {
     if (event.source !== window || event.origin !== location.origin || event.data?.source !== SOURCE) return;
     if (event.data?.type === "media-urls") {
+      for (const track of (Array.isArray(event.data.tracks) ? event.data.tracks : []).slice(0, 128)) {
+        if (isMediaUrl(track?.url) && ["video", "audio"].includes(track.kind)) {
+          trackKinds.set(new URL(track.url).pathname, track.kind);
+          if (trackKinds.size > 512) trackKinds.delete(trackKinds.keys().next().value);
+        }
+      }
       reportUrls(event.data.urls, `page-${event.data.reason || "playurl"}`, false);
+    } else if (event.data?.type === "media-observed") {
+      for (const item of (Array.isArray(event.data.originals) ? event.data.originals : []).slice(0, 8)) {
+        if (isMediaUrl(item?.url) && isMediaUrl(item.originalUrl)
+          && new URL(item.url).pathname === new URL(item.originalUrl).pathname) {
+          mediaOriginals.set(item.url, { url: item.url, originalUrl: item.originalUrl,
+            startByte: Number.isSafeInteger(item.startByte) && item.startByte >= 0 && item.startByte <= 2 ** 40 ? item.startByte : 0 });
+          if (mediaOriginals.size > 512) mediaOriginals.delete(mediaOriginals.keys().next().value);
+          // Repeat transfers of one signed URL have different Range offsets.
+          observedResponseUrls.delete(item.url);
+        }
+      }
+      reportUrls(event.data.urls, "page-response", true);
     } else if (event.data?.type === "page-changed") {
       reportNavigation(String(event.data.url || location.href));
     }
@@ -338,9 +387,9 @@
     if (message?.type === "rescan") {
       // MV3 workers can sleep while the page stays open. Replay known media
       // without downloading or reclassifying resources from older videos.
-      for (const [known, observed] of [[discoveredUrls, false], [observedResourceUrls, true]]) {
+      for (const [known, observed] of [[discoveredUrls, false], [observedResourceUrls, true], [observedResponseUrls, true]]) {
         const urls = sanitizeUrls([...known].reverse());
-        if (urls.length) send({ type: "media-discovered", urls, observed, source: "rescan-cache", pageUrl: location.href, connection: connectionHint() });
+        if (urls.length) send({ type: "media-discovered", urls, observed, tracks: urls.map(url => ({ url, kind: trackKinds.get(new URL(url).pathname) || "unknown" })), originals: known === observedResponseUrls ? urls.map(url => mediaOriginals.get(url)).filter(Boolean) : [], source: known === observedResponseUrls ? "page-response" : "rescan-cache", pageUrl: location.href, connection: connectionHint() });
       }
       periodicDiscovery();
       return false;
@@ -402,4 +451,7 @@
   connection?.addEventListener?.("change", reportNetworkChange);
   window.addEventListener("online", reportNetworkChange);
   window.addEventListener("offline", reportNetworkChange);
+  // Explicit user interaction cancels this narrowly scoped recovery watchdog.
+  window.addEventListener("pointerdown", clearRecoveryWatchdog, { capture: true });
+  window.addEventListener("keydown", clearRecoveryWatchdog, { capture: true });
 })();

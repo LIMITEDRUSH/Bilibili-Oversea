@@ -31,3 +31,27 @@ test("页面桥接只发出 bilivideo 媒体地址", () => {
   assert.equal(source.includes("eval("), false);
   assert.equal(source.includes("chrome."), false);
 });
+
+test("桥接保留 DASH 音视频类别，并报告实际 fetch/XHR 响应地址", async () => {
+  const video="https://upos-hz-mirrorakam.akamaized.net/upgcxcode/hd/v.m4s";
+  const audio="https://audio.bilivideo.com/upgcxcode/hd/a.m4s";
+  const actual="https://target.bilivideo.com/upgcxcode/hd/v.m4s";
+  const messages=[];
+  class XHR { addEventListener(name,handler){this[name]=handler;} }
+  XHR.prototype.open=function(){};
+  XHR.prototype.setRequestHeader=function(name,value){this.header=[name,value];};
+  const window={__playinfo__:{data:{dash:{video:[{baseUrl:video}],audio:[{base_url:audio}]}}},
+    fetch:async()=>({url:actual}),history:{pushState(){},replaceState(){}},postMessage:m=>messages.push(m),addEventListener(){}};
+  vm.runInContext(source,vm.createContext({window,XMLHttpRequest:XHR,URL,Headers,WeakSet,Set,Map,Object,Array,String,
+    location:{origin:"https://www.bilibili.com"},queueMicrotask:fn=>fn()}));
+  assert.deepEqual(JSON.parse(JSON.stringify(messages[0].tracks)),[{url:video,kind:"video"},{url:audio,kind:"audio"}]);
+  await window.fetch(video,{headers:{Range:"bytes=123456-385599"}});
+  assert.equal(messages.at(-1).type,"media-observed");
+  assert.equal(messages.at(-1).urls[0],actual);
+  assert.equal(messages.at(-1).originals[0].originalUrl,video);
+  assert.equal(messages.at(-1).originals[0].startByte,123456);
+  const xhr=new XHR();xhr.open("GET",video);xhr.setRequestHeader("Range","bytes=543210-805353");xhr.responseURL=actual;xhr.load();
+  assert.equal(messages.at(-1).urls[0],actual);
+  assert.equal(messages.at(-1).originals[0].startByte,543210);
+  assert.deepEqual(xhr.header,["Range","bytes=543210-805353"]);
+});

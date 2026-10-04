@@ -4,6 +4,7 @@
   const SOURCE = "bili-cdn-auto-page-v2";
   const PLAYURL_PATTERN = /(?:\/playurl|\/play\/url)(?:\?|$)/i;
   const MAX_URLS = 8;
+  const mediaRequests = new WeakMap();
 
   function mediaUrl(value) {
     try {
@@ -12,6 +13,7 @@
         && (
           url.hostname.toLowerCase().endsWith(".bilivideo.com")
           || url.hostname.toLowerCase().endsWith(".mcdn.bilivideo.cn")
+          || url.hostname.toLowerCase() === "upos-hz-mirrorakam.akamaized.net"
         )
         && url.pathname.includes("/upgcxcode/");
     } catch {
@@ -42,9 +44,30 @@
     return output;
   }
 
+  function collectMediaTracks(root) {
+    const tracks = new Map();
+    const seen = new WeakSet();
+    const queue = [root];
+    let visited = 0;
+    while (queue.length && visited++ < 4_000 && tracks.size < 128) {
+      const value = queue.shift();
+      if (!value || typeof value !== "object" || seen.has(value)) continue;
+      seen.add(value);
+      for (const kind of ["video", "audio"]) {
+        for (const track of Array.isArray(value.dash?.[kind]) ? value.dash[kind].slice(0, 32) : []) {
+          for (const url of collectMediaUrls(track)) {
+            if (tracks.size < 128) tracks.set(url, { url, kind });
+          }
+        }
+      }
+      queue.push(...(Array.isArray(value) ? value : Object.values(value)).slice(0, 200));
+    }
+    return [...tracks.values()];
+  }
+
   function announce(payload, reason = "playurl") {
     const urls = collectMediaUrls(payload);
-    if (urls.length) window.postMessage({ source: SOURCE, type: "media-urls", reason, urls }, location.origin);
+    if (urls.length) window.postMessage({ source: SOURCE, type: "media-urls", reason, urls, tracks: collectMediaTracks(payload) }, location.origin);
   }
 
   function looksLikePlayurl(value) {
@@ -55,12 +78,26 @@
     }
   }
 
+  function rangeStart(range) {
+    const start = Number(String(range || "").match(/^bytes=(\d+)-/i)?.[1] || 0);
+    return Number.isSafeInteger(start) && start >= 0 && start <= 2 ** 40 ? start : 0;
+  }
+
+  function observeResponse(value, originalUrl, startByte = 0) {
+    if (mediaUrl(value)) window.postMessage({ source: SOURCE, type: "media-observed", urls: [value],
+      originals: [{ url: value, originalUrl: mediaUrl(originalUrl) ? String(originalUrl) : value, startByte }] }, location.origin);
+  }
+
   const nativeFetch = window.fetch;
   if (typeof nativeFetch === "function") {
     window.fetch = async function biliCdnAutoFetch(input, init) {
       const response = await nativeFetch.call(this, input, init);
       const requestUrl = typeof input === "string" || input instanceof URL ? input : input?.url;
       if (looksLikePlayurl(requestUrl)) response.clone().json().then((value) => announce(value, "fetch")).catch(() => {});
+      if (mediaUrl(requestUrl)) {
+        const headers = typeof Headers === "function" ? new Headers(init?.headers || input?.headers) : null;
+        observeResponse(response.url, requestUrl, rangeStart(headers?.get("range")));
+      }
       return response;
     };
   }
@@ -73,9 +110,23 @@
           announce(this.responseType === "json" ? this.response : JSON.parse(this.responseText), "xhr");
         } catch {}
       }, { once: true });
+    } else if (mediaUrl(url)) {
+      mediaRequests.set(this, { originalUrl: String(url), startByte: 0 });
+      this.addEventListener("load", () => {
+        const request = mediaRequests.get(this);
+        observeResponse(this.responseURL, request?.originalUrl, request?.startByte || 0);
+      }, { once: true });
     }
     return nativeOpen.call(this, method, url, ...rest);
   };
+
+  const nativeSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
+  if (typeof nativeSetRequestHeader === "function") {
+    XMLHttpRequest.prototype.setRequestHeader = function biliCdnAutoHeader(name, value) {
+      if (String(name).toLowerCase() === "range" && mediaRequests.has(this)) mediaRequests.get(this).startByte = rangeStart(value);
+      return nativeSetRequestHeader.call(this, name, value);
+    };
+  }
 
   window.addEventListener("message", (event) => {
     if (event.source === window && event.data?.source === SOURCE && event.data?.type === "rescan") {

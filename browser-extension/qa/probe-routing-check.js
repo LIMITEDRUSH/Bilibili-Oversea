@@ -22,13 +22,27 @@ async (page) => {
   });
   await session.send('Network.enable');
   let result;
+  const controlledRuleId=899999;
   try {
-    const applied=await ui.evaluate(({tabId,settings})=>chrome.runtime.sendMessage({type:'set-settings',tabId,settings}), {tabId,settings:{...saved,enabled:true,mode:'manual',manualHost:targetHost,disabledHosts:[]}});
+    const state=await ui.evaluate(tabId=>chrome.runtime.sendMessage({type:'get-state',tabId}),tabId);
+    const nativePassthrough=state.state?.passthroughReason==='baseline-akamai';
+    let applied;
+    if(nativePassthrough) {
+      // Controlled isolation fixture only: actual Akamai playback stays native.
+      // Temporarily redirect a known bilivideo sample, not the Akamai source.
+      await ui.evaluate(({tabId,settings})=>chrome.runtime.sendMessage({type:'set-settings',tabId,settings}),{tabId,settings:{...saved,enabled:true,mode:'original'}});
+      await ui.evaluate(async({tabId,sourceHost,targetHost,id})=>{
+        const {makeRedirectRule}=await import('./engine.js');
+        await chrome.declarativeNetRequest.updateSessionRules({removeRuleIds:[id],addRules:[makeRedirectRule({id,tabId,sourceHosts:[sourceHost],targetHost})]});
+      },{tabId,sourceHost,targetHost,id:controlledRuleId});
+      applied={state:{ruleInstalled:true}};
+    } else applied=await ui.evaluate(({tabId,settings})=>chrome.runtime.sendMessage({type:'set-settings',tabId,settings}), {tabId,settings:{...saved,enabled:true,mode:'manual',manualHost:targetHost,disabledHosts:[]}});
     const probe=await worker.evaluate(({tabId,sourceUrl,sourceHost})=>chrome.tabs.sendMessage(tabId,{type:'probe-candidates',sourceUrl,hosts:[sourceHost],byteLimit:1024,timeoutMs:4500}), {tabId,sourceUrl,sourceHost});
     const playbackRequest=await page.evaluate(async sourceUrl=>{try{const response=await fetch(sourceUrl,{headers:{Range:'bytes=0-3071'},credentials:'omit'});await response.body?.cancel();return {host:new URL(response.url).hostname,status:response.status};}catch(error){return {error:error.message}}},sourceUrl);
-    result={sourceHost,targetHost,installed:applied.state.ruleInstalled,probe:probe.results,playbackRequest,network:observed};
+    result={sourceHost,targetHost,installed:applied.state.ruleInstalled,controlledIsolationFixture:nativePassthrough,probe:probe.results,playbackRequest,network:observed};
     result.pass=applied.state.ruleInstalled && probe.results.some(r=>r.ok && r.host===sourceHost && r.responseHost===sourceHost) && playbackRequest.host===targetHost && playbackRequest.status===206;
   } finally {
+    await worker.evaluate(id=>chrome.declarativeNetRequest.updateSessionRules({removeRuleIds:[id]}),controlledRuleId);
     await ui.evaluate(({tabId,settings})=>chrome.runtime.sendMessage({type:'set-settings',tabId,settings}), {tabId,settings:saved});
     await session.detach();
     await ui.close();

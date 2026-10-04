@@ -4,6 +4,15 @@ export const DEFAULT_CANDIDATES = Object.freeze([
   "upos-sz-mirrorhwov.bilivideo.com",
 ]);
 
+// Observed for truthful diagnostics only. Keep 2.2.0's Akamai passthrough:
+// limited cross-CDN samples did not predict reliable HD segment delivery.
+export const BILI_AKAMAI_HOST = "upos-hz-mirrorakam.akamaized.net";
+
+export function isCdnTargetHost(value) {
+  const host = String(value || "").trim().toLowerCase().replace(/\.$/, "");
+  return isBiliVideoHost(host);
+}
+
 export const DEFAULT_SETTINGS = Object.freeze({
   enabled: true,
   mode: "auto",
@@ -31,7 +40,7 @@ export function isBiliVideoHost(value) {
 
 export function isBiliMediaHost(value) {
   const host = String(value || "").trim().toLowerCase().replace(/\.$/, "");
-  return isBiliVideoHost(host)
+  return isCdnTargetHost(host) || host === BILI_AKAMAI_HOST
     || (host.endsWith(".mcdn.bilivideo.cn") && host.split(".").every((label) => (
       /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label)
     )));
@@ -49,7 +58,7 @@ export function isMediaUrl(value) {
 }
 
 export function replaceMediaHost(value, targetHost) {
-  if (!isMediaUrl(value) || !isBiliVideoHost(targetHost)) {
+  if (!isMediaUrl(value) || !isCdnTargetHost(targetHost)) {
     throw new TypeError("invalid Bilibili media URL or CDN host");
   }
   const url = new URL(value);
@@ -62,7 +71,7 @@ export function uniqueHosts(values, limit = 12) {
   const seen = new Set();
   for (const value of values || []) {
     const host = String(value || "").trim().toLowerCase();
-    if (!isBiliVideoHost(host) || seen.has(host)) continue;
+    if (!isCdnTargetHost(host) || seen.has(host)) continue;
     seen.add(host);
     output.push(host);
     if (output.length >= limit) break;
@@ -87,7 +96,7 @@ export function sanitizeSettings(input = {}) {
   const mode = ["auto", "manual", "original"].includes(input.mode)
     ? input.mode
     : DEFAULT_SETTINGS.mode;
-  const manualHost = isBiliVideoHost(input.manualHost) ? input.manualHost.toLowerCase() : "";
+  const manualHost = isCdnTargetHost(input.manualHost) ? input.manualHost.toLowerCase() : "";
   return {
     enabled: input.enabled !== false,
     mode,
@@ -118,7 +127,7 @@ export function sanitizeBenchmarkCache(input = {}, now = Date.now()) {
   const timestamp = Number(now) || Date.now();
   const results = [];
   for (const item of Array.isArray(input.results) ? input.results : []) {
-    if (!item || !isBiliVideoHost(item.host)) continue;
+    if (!item || !isCdnTargetHost(item.host)) continue;
     const sampledAt = Number(item.sampledAt) || 0;
     const ttl = item.ok ? ADAPTIVE_POLICY.successCacheMs : ADAPTIVE_POLICY.failureCacheMs;
     if (!sampledAt || timestamp - sampledAt > ttl || sampledAt > timestamp + 60_000) continue;
@@ -150,7 +159,7 @@ export function shouldSwitchAfterVerification(current, alternative, ratio = ADAP
 export function rankResults(results, currentHost = "") {
   const current = String(currentHost || "").toLowerCase();
   return [...(results || [])]
-    .filter((item) => item && item.ok && isBiliVideoHost(item.host))
+    .filter((item) => item && item.ok && isCdnTargetHost(item.host))
     .sort((a, b) => {
       if (b.kbps !== a.kbps) return b.kbps - a.kbps;
       if (a.ttfbMs !== b.ttfbMs) return a.ttfbMs - b.ttfbMs;
@@ -164,8 +173,8 @@ export function makeRedirectRule({ id, tabId, sourceHosts, targetHost }) {
   if (!Number.isInteger(id) || id < 1 || !Number.isInteger(tabId) || tabId < 0) {
     throw new TypeError("invalid rule or tab id");
   }
-  if (!isBiliVideoHost(targetHost)) throw new TypeError("invalid target host");
-  const requestDomains = uniqueMediaHosts(sourceHosts).filter((host) => host !== targetHost);
+  if (!isCdnTargetHost(targetHost)) throw new TypeError("invalid target host");
+  const requestDomains = uniqueMediaHosts(sourceHosts).filter((host) => host !== targetHost && host !== BILI_AKAMAI_HOST);
   if (!requestDomains.length) return null;
   return {
     id,
@@ -178,6 +187,7 @@ export function makeRedirectRule({ id, tabId, sourceHosts, targetHost }) {
       tabIds: [tabId],
       initiatorDomains: ["bilibili.com"],
       requestDomains,
+      regexFilter: "^https?://[^/]+/upgcxcode/",
       resourceTypes: ["media", "xmlhttprequest", "other"],
     },
   };
@@ -190,6 +200,9 @@ export function publicTabState(state) {
     selectedHost: state.selectedHost || "",
     originalHost: state.originalHost || "",
     actualHost: state.actualHost || "",
+    sourceKind: state.sourceUrls?.[0] ? state.trackKinds?.get(new URL(state.sourceUrls[0]).pathname) || "unknown" : "unknown",
+    actualHostSource: state.actualHostSource || "",
+    passthroughReason: state.passthroughReason || "",
     ruleInstalled: state.ruleInstalled === true,
     discoverySource: state.discoverySource || "",
     lastDetectedAt: Number(state.lastDetectedAt) || 0,

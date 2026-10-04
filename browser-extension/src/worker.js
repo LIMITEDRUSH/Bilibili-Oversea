@@ -1,8 +1,9 @@
 import {
   ADAPTIVE_POLICY,
+  BILI_AKAMAI_HOST,
   DEFAULT_CANDIDATES,
   DEFAULT_SETTINGS,
-  isBiliVideoHost,
+  isCdnTargetHost,
   isMediaUrl,
   makeRedirectRule,
   publicTabState,
@@ -16,7 +17,7 @@ import {
 import { fetchProbe, probeReferrerRule, PROBE_REFERRER_RULE_ID } from "./network-probe.js";
 
 const SETTINGS_KEY = "biliCdnAutoSettingsV2";
-const BENCHMARK_CACHE_KEY = "biliCdnAutoBenchmarkV4";
+const BENCHMARK_CACHE_KEY = "biliCdnAutoBenchmarkV5";
 const QUICK_PROBE_BYTES = 128 * 1024;
 const QUICK_PROBE_TIMEOUT_MS = 4_500;
 const SUSTAINED_PROBE_BYTES = 1024 * 1024;
@@ -31,10 +32,17 @@ function newTabState() {
   return {
     phase: "waiting",
     sourceUrls: [],
+    trackKinds: new Map(),
+    observedVideoPath: "",
+    probeOffsets: new Map(),
+    appliedSourceHosts: new Set(),
+    pendingCandidateMaintenance: false,
+    passthroughReason: "",
     originalHost: "",
     observedHosts: new Set(),
     selectedHost: "",
     actualHost: "",
+    actualHostSource: "",
     ruleInstalled: false,
     discoverySource: "",
     lastDetectedAt: 0,
@@ -147,7 +155,7 @@ function cancelTesting(tabId) {
 }
 
 async function handleProbeFetch(tabId, message) {
-  if (!isMediaUrl(message.sourceUrl) || !isBiliVideoHost(message.host)
+  if (!isMediaUrl(message.sourceUrl) || !isCdnTargetHost(message.host)
     || !/^[a-z0-9-]{1,64}$/i.test(message.probeId || "")) throw new TypeError("invalid probe request");
   const state = stateFor(tabId);
   const controller = new AbortController();
@@ -179,6 +187,7 @@ async function applyTarget(tabId, targetHost, phase = "active") {
   await chrome.declarativeNetRequest.updateSessionRules(update);
   state.selectedHost = targetHost;
   state.ruleInstalled = Boolean(rule);
+  state.appliedSourceHosts = new Set(state.observedHosts);
   state.phase = phase;
   await setBadge(tabId, phase);
   await publish(tabId);
@@ -201,6 +210,7 @@ async function probeCandidates(tabId, sourceUrl, candidates, {
       timeoutMs,
       waitForBufferSeconds,
       waitTimeoutMs,
+      startByte: stateFor(tabId).probeOffsets.get(new URL(sourceUrl).pathname) || 0,
     });
   } catch (error) {
     response = { ok: false, error: String(error?.message || error), results: [] };
@@ -229,10 +239,12 @@ async function probeCandidates(tabId, sourceUrl, candidates, {
 
 async function benchmark(tabId, reason = "automatic") {
   const state = stateFor(tabId);
+  if (state.originalHost === BILI_AKAMAI_HOST) return null;
   if (state.testing) return state.testing;
   if (state.verificationPending) return null;
   const sourceUrl = state.sourceUrls.find(isMediaUrl);
   if (!sourceUrl) return null;
+  const testedVideoKey = state.videoKey;
   const testing = (async () => {
     const runId = ++state.runId;
     const settings = await readSettings();
@@ -262,7 +274,8 @@ async function benchmark(tabId, reason = "automatic") {
       state.results = stampResults(quickResults, now);
       state.lastTestedAt = now;
       state.lastVerifiedAt = now;
-      state.verifiedVideoKey = state.videoKey;
+      state.verifiedVideoKey = testedVideoKey;
+      state.pendingCandidateMaintenance = false;
       state.phase = "error";
       state.lastError = `测速没有可用节点（${reason}）`;
       state.selectedHost = "";
@@ -293,7 +306,8 @@ async function benchmark(tabId, reason = "automatic") {
     );
     state.lastTestedAt = now;
     state.lastVerifiedAt = now;
-    state.verifiedVideoKey = state.videoKey;
+    state.verifiedVideoKey = testedVideoKey;
+    state.pendingCandidateMaintenance = [...state.observedHosts].some(host => isCdnTargetHost(host) && !candidates.includes(host));
     state.failedHosts.clear();
     const finalRanked = rankResults(sustainedResults || [], state.originalHost);
     const winner = finalRanked[0] || quickRanked[0];
@@ -371,10 +385,26 @@ async function honorMode(tabId, { forceRetest = false, backgroundBenchmark = fal
     await publish(tabId);
     return;
   }
-  if (settings.mode === "manual" && isBiliVideoHost(settings.manualHost)) {
+  // This is the released 2.2.0 behaviour, now visible instead of falsely
+  // reporting an optimized audio host while the HD video stays on Akamai.
+  if (state.originalHost === BILI_AKAMAI_HOST) {
+    cancelTesting(tabId);
+    state.phase = "original";
+    state.selectedHost = "";
+    state.results = [];
+    state.lastError = "";
+    state.pendingCandidateMaintenance = false;
+    state.passthroughReason = "baseline-akamai";
+    if (state.ruleInstalled) await clearRule(tabId);
+    await setBadge(tabId, "original");
+    return;
+  }
+  state.passthroughReason = "";
+  if (settings.mode === "manual" && isCdnTargetHost(settings.manualHost)) {
     cancelTesting(tabId);
     state.lastError = "";
-    if (state.phase === "manual" && state.selectedHost === settings.manualHost) return;
+    if (state.phase === "manual" && state.selectedHost === settings.manualHost
+      && [...state.observedHosts].every(host => state.appliedSourceHosts.has(host))) return;
     await applyTarget(tabId, settings.manualHost, "manual");
     return;
   }
@@ -386,10 +416,18 @@ async function honorMode(tabId, { forceRetest = false, backgroundBenchmark = fal
   }
   if (forceRetest) return runBenchmark("manual");
   if (!state.selectedHost || !state.results.length) {
-    if (!await hydrateFromCache(tabId, settings)) return runBenchmark("automatic");
+    if (!await hydrateFromCache(tabId, settings)) {
+      // SSR may advertise a different quality/signature from the actual HD
+      // player request. Keep uncached playback original until its video URL
+      // is observed; cached winners still apply immediately as in 2.2.0.
+      if (state.trackKinds.size && !state.observedVideoPath) return;
+      return runBenchmark("automatic");
+    }
     return;
   }
-  if (state.phase !== "active" && state.phase !== "verifying" && state.phase !== "testing") {
+  if ((state.phase !== "active" && state.phase !== "verifying" && state.phase !== "testing")
+    || (!state.pendingCandidateMaintenance && !state.testing
+      && [...state.observedHosts].some(host => !state.appliedSourceHosts.has(host)))) {
     await applyTarget(tabId, state.selectedHost, "active");
   }
 }
@@ -409,22 +447,65 @@ function pageVideoKey(pageUrl, sourceUrl) {
   }
 }
 
-async function rememberMedia(tabId, urls, { source = "page", observed = false, pageUrl = "" } = {}) {
+async function rememberMedia(tabId, urls, { source = "page", observed = false, pageUrl = "", tracks = [], originals = [] } = {}) {
   const state = stateFor(tabId);
-  const valid = [...new Set((urls || []).filter(isMediaUrl))].slice(0, 4);
-  if (!valid.length) return;
-  const nextVideoKey = pageVideoKey(pageUrl || state.pageUrl, valid[0]);
+  const validUrls = [...new Set((Array.isArray(urls) ? urls : []).filter(isMediaUrl))];
+  if (!validUrls.length) return;
+  for (const track of (Array.isArray(tracks) ? tracks : []).slice(0, 128)) {
+    if (isMediaUrl(track?.url) && ["video", "audio"].includes(track.kind)) {
+      state.trackKinds.set(new URL(track.url).pathname, track.kind);
+      if (state.trackKinds.size > 512) state.trackKinds.delete(state.trackKinds.keys().next().value);
+    }
+  }
+  const kind = url => state.trackKinds.get(new URL(url).pathname) || "unknown";
+  const weight = url => ({ video: 0, audio: 2 }[kind(url)] ?? 1);
+  const valid = validUrls.sort((left, right) => weight(left) - weight(right)).slice(0, 4);
+  for (const item of (Array.isArray(originals) ? originals : []).slice(0, 8)) {
+    if (!valid.includes(item?.url) || !isMediaUrl(item.originalUrl)
+      || new URL(item.url).pathname !== new URL(item.originalUrl).pathname) continue;
+    if (kind(item.url) === "video" && Number.isSafeInteger(item.startByte) && item.startByte >= 0 && item.startByte <= 2 ** 40) {
+      state.probeOffsets.set(new URL(item.url).pathname, item.startByte);
+      if (state.probeOffsets.size > 512) state.probeOffsets.delete(state.probeOffsets.keys().next().value);
+      state.originalHost = new URL(item.originalUrl).hostname;
+    }
+  }
+  const videoUrls = valid.filter(url => kind(url) === "video");
+  const retained = state.sourceUrls.filter(isMediaUrl);
+  // Track descriptors come from playurl, never guessed from filename numbers.
+  // Recent audio completions cannot replace the actual video benchmark source.
+  state.sourceUrls = [...new Set([
+    ...(observed ? videoUrls : []),
+    ...retained.filter(url => kind(url) === "video"), ...videoUrls,
+    ...valid.filter(url => kind(url) === "unknown"),
+    ...retained.filter(url => kind(url) === "unknown"),
+    ...valid.filter(url => kind(url) === "audio"),
+  ])].slice(0, 8);
+  if (observed && videoUrls.length) {
+    const actualPath = new URL(videoUrls[0]).pathname;
+    if (actualPath !== state.observedVideoPath) cancelTesting(tabId);
+    state.observedVideoPath = actualPath;
+  }
+  const nextVideoKey = pageVideoKey(pageUrl || state.pageUrl, valid[0])
+    + (state.observedVideoPath ? `\n${state.observedVideoPath}` : "");
   if (nextVideoKey && nextVideoKey !== state.videoKey) {
     state.videoKey = nextVideoKey;
     state.verifiedVideoKey = "";
   }
   if (pageUrl) state.pageUrl = String(pageUrl);
-  state.sourceUrls = valid;
-  for (const value of valid) state.observedHosts.add(new URL(value).hostname.toLowerCase());
+  for (const value of valid) {
+    const host = new URL(value).hostname.toLowerCase();
+    if (!state.observedHosts.has(host) && isCdnTargetHost(host) && state.results.length
+      && !state.results.some(item => item.host === host)) state.pendingCandidateMaintenance = true;
+    state.observedHosts.add(host);
+  }
   state.originalHost ||= new URL(valid[0]).hostname.toLowerCase();
   state.discoverySource = String(source || "page").slice(0, 40);
   state.lastDetectedAt = Date.now();
-  if (observed) state.actualHost = new URL(valid[0]).hostname.toLowerCase();
+  if (observed && (source === "page-response" || state.actualHostSource !== "page-response")
+    && (videoUrls.length || (!state.observedVideoPath && kind(valid[0]) !== "audio"))) {
+    state.actualHost = new URL((videoUrls[0] || valid[0])).hostname.toLowerCase();
+    state.actualHostSource = source;
+  }
   await honorMode(tabId);
   await publish(tabId);
 }
@@ -435,9 +516,16 @@ async function resetForNavigation(tabId, pageUrl) {
   state.runId += 1;
   state.testing = null;
   state.sourceUrls = [];
+  state.trackKinds.clear();
+  state.observedVideoPath = "";
+  state.probeOffsets.clear();
+  state.appliedSourceHosts.clear();
+  state.pendingCandidateMaintenance = false;
+  state.passthroughReason = "";
   state.phase = "waiting";
   state.originalHost = "";
   state.actualHost = "";
+  state.actualHostSource = "";
   state.selectedHost = "";
   state.results = [];
   state.lastTestedAt = 0;
@@ -466,6 +554,7 @@ async function recoverFromStall(tabId, reason = "stall") {
   const state = stateFor(tabId);
   const settings = await readSettings();
   if (!settings.enabled || settings.mode !== "auto") return null;
+  if (state.originalHost === BILI_AKAMAI_HOST) return null;
   cancelTesting(tabId);
   if (!state.selectedHost || !state.results.length) return benchmark(tabId, reason);
   const failedHost = state.selectedHost;
@@ -489,6 +578,7 @@ async function lightVerify(tabId, reason = "periodic") {
   if (state.testing || state.verificationPending) return state.testing;
   const sourceUrl = state.sourceUrls.find(isMediaUrl);
   if (!sourceUrl || !state.selectedHost) return null;
+  const testedVideoKey = state.videoKey;
   const pendingRunId = state.runId;
   state.verificationPending = true;
   let settings;
@@ -527,7 +617,7 @@ async function lightVerify(tabId, reason = "periodic") {
     const verified = stampResults(probeResults, now);
     state.results = mergeResults(state.results, verified);
     state.lastVerifiedAt = now;
-    state.verifiedVideoKey = state.videoKey;
+    state.verifiedVideoKey = testedVideoKey;
     const byHost = new Map(verified.map((item) => [item.host, item]));
     const current = byHost.get(state.selectedHost);
     const alternative = byHost.get(backup.host);
@@ -567,6 +657,10 @@ async function maybeAdaptiveMaintenance(tabId, activity) {
   const settings = await readSettings();
   if (!settings.enabled || settings.mode !== "auto") return;
   const now = Date.now();
+  if (state.pendingCandidateMaintenance) {
+    await benchmark(tabId, "new-playback-candidate");
+    return;
+  }
   if (!state.lastTestedAt || now - state.lastTestedAt >= ADAPTIVE_POLICY.successCacheMs) {
     await benchmark(tabId, "cache-expired");
     return;
@@ -594,6 +688,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         source: message.source,
         observed: message.observed === true,
         pageUrl: message.pageUrl,
+        tracks: message.tracks,
+        originals: message.originals,
       });
       return { ok: true };
     }

@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { fetchProbe, probeReferrerRule } from "../src/network-probe.js";
 
-test("测速来源规则仅限本扩展的 CDN 请求，不修改页面请求或申请新权限", () => {
+test("测速来源规则仅限本扩展的媒体请求，不修改页面请求或申请新功能权限", () => {
   const rule = probeReferrerRule("a".repeat(32));
   assert.equal(rule.action.type, "modifyHeaders");
   assert.deepEqual(rule.condition.initiatorDomains, ["a".repeat(32)]);
   assert.deepEqual(rule.condition.requestDomains, ["bilivideo.com"]);
+  assert.equal(new RegExp(rule.condition.regexFilter).test("https://upos-hz-mirrorakam.akamaized.net/not-media/file"), false);
   assert.deepEqual(rule.action.requestHeaders, [{ header: "referer", operation: "set", value: "https://www.bilibili.com/" }]);
   assert.throws(() => probeReferrerRule("bilibili.com"));
 });
@@ -39,4 +40,13 @@ test("不能把被重定向至其他 CDN 的结果标成目标节点成功", asy
     assert.equal(result.bytes, 0);
     assert.equal(result.responseHost, "other.bilivideo.com");
   } finally { globalThis.fetch = previous; }
+});
+
+test("比较当前片段的有限 Range，偏移非法时安全回到零",async()=>{
+  const previous=globalThis.fetch,ranges=[];
+  globalThis.fetch=async(url,options)=>{ranges.push(options.headers.Range);return {ok:true,status:206,url,body:{getReader:()=>({read:async()=>({done:false,value:new Uint8Array(1024)}),cancel:async()=>{}})}};};
+  try{
+    for(const startByte of [8000000,-1,Infinity])await fetchProbe({sourceUrl:"https://origin.bilivideo.com/upgcxcode/a/video.m4s",host:"target.bilivideo.com",byteLimit:1024,startByte});
+    assert.deepEqual(ranges,["bytes=8000000-8001023","bytes=0-1023","bytes=0-1023"]);
+  }finally{globalThis.fetch=previous;}
 });

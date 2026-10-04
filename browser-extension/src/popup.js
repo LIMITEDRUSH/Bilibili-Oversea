@@ -32,7 +32,7 @@ function renderResults() {
   elements.resultSummary.textContent = results.length
     ? results.filter((item) => item.ok && !settings.disabledHosts.includes(item.host)).length + " / " + results.length + " 可用" + (results.length > 2 ? " ↓" : "")
     : "等待数据";
-  const signature = JSON.stringify([results, state?.selectedHost, settings.mode, settings.manualHost,
+  const signature = JSON.stringify([results, state?.selectedHost, state?.passthroughReason, settings.mode, settings.manualHost,
     settings.disabledHosts, settingBusy, settings.enabled, supported]);
   if (signature === resultsSignature) return;
   resultsSignature = signature;
@@ -41,7 +41,8 @@ function renderResults() {
   if (!results.length) {
     const empty = document.createElement("p");
     empty.className = "empty";
-    empty.textContent = supported ? "播放视频后显示可用线路" : "打开 B 站播放页开始优化";
+    empty.textContent = !supported ? "打开 B 站播放页开始优化"
+      : state?.passthroughReason === "baseline-akamai" ? "此视频保留原始线路，不做候选测速" : "播放视频后显示可用线路";
     elements.results.append(empty);
     return;
   }
@@ -121,14 +122,16 @@ function render() {
   elements.testedAt.textContent = state?.lastVerifiedAt
     ? "最近复核 " + formatTime(state.lastVerifiedAt)
     : state?.lastTestedAt ? "最近测速 " + formatTime(state.lastTestedAt) : "尚未测速";
-  elements.modeDescription.textContent = settings.mode === "manual" ? "固定线路，不自动轮换"
+  const nativePassthrough = settings.enabled && settings.mode !== "original" && state?.passthroughReason === "baseline-akamai";
+  elements.modeDescription.textContent = nativePassthrough ? "此视频保留原始线路"
+    : settings.mode === "manual" ? "固定线路，不自动轮换"
     : settings.mode === "original" ? "使用 B 站默认线路" : "按缓冲状态智能切换";
   elements.auto.setAttribute("aria-pressed", String(settings.mode === "auto"));
   elements.original.setAttribute("aria-pressed", String(settings.mode === "original"));
   elements.auto.disabled = settingBusy || !supported;
   elements.original.disabled = settingBusy || !supported;
   elements.retest.disabled = settingBusy || view.busy || !view.canRetest;
-  elements.refresh.textContent = "自适应 · 15 分钟轻量复核";
+  elements.refresh.textContent = nativePassthrough ? "当前视频 · 原始直通" : "自适应 · 15 分钟轻量复核";
   renderResults();
 }
 

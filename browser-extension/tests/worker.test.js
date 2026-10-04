@@ -1,7 +1,122 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const CACHE_KEY = "biliCdnAutoBenchmarkV4";
+const CACHE_KEY = "biliCdnAutoBenchmarkV5";
+
+function cachedFixture() {
+  const now=Date.now();
+  return { [CACHE_KEY]:{winnerHost:"upos-sz-mirrorcosov.bilivideo.com",lastFullTestedAt:now,lastVerifiedAt:now,
+    results:["upos-sz-mirrorcosov.bilivideo.com","upos-sz-mirroraliov.bilivideo.com"].map((host,i)=>({host,ok:true,status:206,bytes:1048576,elapsedMs:100+i*100,ttfbMs:5,stage:"sustained",sampledAt:now}))} };
+}
+
+test("无缓存时不拿 SSR 的其他画质替代实际最高画质测速",async()=>{
+  const harness=installChrome();
+  try{
+    await import(`../src/worker.js?actual-source=${Date.now()}`);
+    const pageUrl="https://www.bilibili.com/video/BVHD",sender={tab:{id:83}};
+    const advertised="https://origin.bilivideo.com/upgcxcode/hd/advertised.m4s";
+    const actual="https://origin.bilivideo.com/upgcxcode/hd/actual-high.m4s";
+    await send(harness.listener(),{type:"media-discovered",pageUrl,urls:[advertised],tracks:[{url:advertised,kind:"video"}]},sender);
+    assert.equal(harness.probeMessages.length,0);
+    await send(harness.listener(),{type:"media-discovered",pageUrl,urls:[actual],tracks:[{url:actual,kind:"video"}],observed:true,source:"page-response"},sender);
+    assert.equal(harness.probeMessages[0].sourceUrl,actual);
+  }finally{delete globalThis.chrome;}
+});
+
+test("音频完成不覆盖视频测速源，也不冒充当前视频线路",async()=>{
+  const harness=installChrome({storage:cachedFixture()});
+  try {
+    await import(`../src/worker.js?tracks=${Date.now()}`);
+    const video="https://upos-sz-mirrorcosov.bilivideo.com/upgcxcode/hd/video.m4s";
+    const audio="https://audio.bilivideo.com/upgcxcode/hd/audio.m4s";
+    const pageUrl="https://www.bilibili.com/video/BVHD",sender={tab:{id:81}};
+    await send(harness.listener(),{type:"media-discovered",pageUrl,urls:[video,audio],tracks:[{url:video,kind:"video"},{url:audio,kind:"audio"}]},sender);
+    await send(harness.listener(),{type:"media-discovered",pageUrl,urls:[audio],tracks:[{url:audio,kind:"audio"}],observed:true,source:"page-response"},sender);
+    await send(harness.listener(),{type:"media-heartbeat",activity:{visible:true,paused:false,ended:false,seeking:false,bufferedAhead:20}},sender);
+    assert.equal(harness.probeMessages[0].sourceUrl,video);
+    const state=(await send(harness.listener(),{type:"get-state",tabId:81})).state;
+    assert.equal(state.sourceKind,"video");assert.equal(state.actualHost,"");
+  }finally{delete globalThis.chrome;}
+});
+
+test("最高画质切换重新轻量复核；实际响应 host 优先于原始性能地址",async()=>{
+  const harness=installChrome({storage:cachedFixture()});
+  try{
+    await import(`../src/worker.js?quality=${Date.now()}`);
+    const sender={tab:{id:82}},pageUrl="https://www.bilibili.com/video/BVHD";
+    const report=async(url,source="page-response")=>send(harness.listener(),{type:"media-discovered",pageUrl,urls:[url],tracks:[{url,kind:"video"}],observed:true,source},sender);
+    const heartbeat=()=>send(harness.listener(),{type:"media-heartbeat",activity:{visible:true,paused:false,ended:false,seeking:false,bufferedAhead:20}},sender);
+    await report("https://upos-sz-mirrorcosov.bilivideo.com/upgcxcode/hd/low.m4s");await heartbeat();
+    const high="https://upos-sz-mirrorcosov.bilivideo.com/upgcxcode/hd/high.m4s";
+    await report(high);await heartbeat();
+    assert.equal(harness.probeMessages.length,2);
+    assert.equal(harness.probeMessages[1].sourceUrl,high);
+    assert.equal(harness.probeMessages[1].byteLimit,262144);
+    await report("https://upos-hz-mirrorakam.akamaized.net/upgcxcode/hd/high.m4s");
+    await report("https://origin.bilivideo.com/upgcxcode/hd/high.m4s","performance");
+    const state=(await send(harness.listener(),{type:"get-state",tabId:82})).state;
+    assert.equal(state.actualHost,"upos-hz-mirrorakam.akamaized.net");
+    assert.equal(state.actualHostSource,"page-response");
+  }finally{delete globalThis.chrome;}
+});
+
+test("新实际 CDN 在安全缓冲后纳入候选，测速使用视频当前片段偏移",async()=>{
+  const harness=installChrome({storage:cachedFixture()});
+  try{
+    await import(`../src/worker.js?segment=${Date.now()}`);
+    const sender={tab:{id:84}},pageUrl="https://www.bilibili.com/video/BVHD";
+    const cos="https://upos-sz-mirrorcosov.bilivideo.com/upgcxcode/hd/high.m4s";
+    const akam="https://new-origin.bilivideo.com/upgcxcode/hd/high.m4s";
+    await send(harness.listener(),{type:"media-discovered",pageUrl,urls:[cos],tracks:[{url:cos,kind:"video"}],observed:true},sender);
+    await send(harness.listener(),{type:"media-discovered",pageUrl,urls:[akam],tracks:[{url:akam,kind:"video"}],observed:true,source:"page-response",originals:[{url:akam,originalUrl:akam,startByte:8000000}]},sender);
+    await send(harness.listener(),{type:"media-heartbeat",activity:{visible:true,paused:false,ended:false,seeking:false,bufferedAhead:7}},sender);
+    assert.equal(harness.probeMessages.length,0);
+    await send(harness.listener(),{type:"media-heartbeat",activity:{visible:true,paused:false,ended:false,seeking:false,bufferedAhead:20}},sender);
+    assert.equal(harness.probeMessages[0].sourceUrl,akam);
+    assert.equal(harness.probeMessages[0].startByte,8000000);
+    assert.ok(harness.probeMessages[0].hosts.includes("new-origin.bilivideo.com"));
+    assert.equal(harness.probeMessages[0].byteLimit,131072);
+  }finally{delete globalThis.chrome;}
+});
+
+test("Akamai 视频沿用 2.2.0 直通，缓存、音频、固定、心跳与卡顿不能自动改道",async()=>{
+  const harness=installChrome({storage:cachedFixture()});
+  try {
+    await import(`../src/worker.js?akam-passthrough=${Date.now()}`);
+    const sender={tab:{id:85}},pageUrl="https://www.bilibili.com/video/BVHD";
+    const video="https://upos-hz-mirrorakam.akamaized.net/upgcxcode/hd/video.m4s";
+    const audio="https://audio.bilivideo.com/upgcxcode/hd/audio.m4s";
+    await send(harness.listener(),{type:"media-discovered",pageUrl,urls:[video,audio],tracks:[{url:video,kind:"video"},{url:audio,kind:"audio"}]},sender);
+    await send(harness.listener(),{type:"media-discovered",pageUrl,urls:[audio],observed:true,source:"page-response"},sender);
+    await send(harness.listener(),{type:"media-discovered",pageUrl,urls:[video],observed:true,source:"page-response",originals:[{url:video,originalUrl:video,startByte:4000000}]},sender);
+    await send(harness.listener(),{type:"media-heartbeat",activity:{visible:true,paused:false,ended:false,seeking:false,bufferedAhead:20}},sender);
+    await send(harness.listener(),{type:"playback-stall",reason:"waiting"},sender);
+    await send(harness.listener(),{type:"set-settings",tabId:85,settings:{enabled:true,mode:"manual",manualHost:"upos-sz-mirroraliov.bilivideo.com"}});
+    const state=(await send(harness.listener(),{type:"get-state",tabId:85})).state;
+    assert.equal(state.passthroughReason,"baseline-akamai");
+    assert.equal(state.actualHost,"upos-hz-mirrorakam.akamaized.net");
+    assert.equal(state.ruleInstalled,false);assert.equal(state.phase,"original");
+    assert.equal(harness.probeMessages.length,0);
+    assert.equal(harness.ruleUpdates.some(update=>update.addRules?.some(rule=>rule.action.type==="redirect")),false);
+  } finally {delete globalThis.chrome;}
+});
+
+test("后台唤醒批次中的大量音频不能挤掉视频；无关原始地址不能改写来源",async()=>{
+  const harness=installChrome({storage:cachedFixture()});
+  try {
+    await import(`../src/worker.js?audio-batch=${Date.now()}`);
+    const sender={tab:{id:86}},pageUrl="https://www.bilibili.com/video/BVHD";
+    const audio=Array.from({length:7},(_,i)=>`https://audio.bilivideo.com/upgcxcode/hd/audio-${i}.m4s`);
+    const video="https://upos-sz-mirrorcosov.bilivideo.com/upgcxcode/hd/video.m4s";
+    const unrelated="https://upos-hz-mirrorakam.akamaized.net/upgcxcode/hd/other.m4s";
+    await send(harness.listener(),{type:"media-discovered",pageUrl,urls:[...audio,video],tracks:[...audio.map(url=>({url,kind:"audio"})),{url:video,kind:"video"},{url:unrelated,kind:"video"}],observed:true,source:"page-response",originals:[{url:unrelated,originalUrl:unrelated,startByte:1}]},sender);
+    await send(harness.listener(),{type:"media-heartbeat",activity:{visible:true,paused:false,ended:false,seeking:false,bufferedAhead:20}},sender);
+    assert.equal(harness.probeMessages[0].sourceUrl,video);
+    const state=(await send(harness.listener(),{type:"get-state",tabId:86})).state;
+    assert.equal(state.sourceKind,"video");assert.equal(state.actualHost,"upos-sz-mirrorcosov.bilivideo.com");
+    assert.equal(state.passthroughReason,"");
+  } finally {delete globalThis.chrome;}
+});
 
 function installChrome({ storage = {}, probeResult, probeStage, updateRule } = {}) {
   let messageListener;
