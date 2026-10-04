@@ -34,9 +34,10 @@ function formatTime(timestamp) {
 function renderResults() {
   const candidateHosts = playback && Date.now() - playback.sampledAt < 5000 ? playback.candidateHosts || [] : [];
   const results = popupRows(settings, state, { candidateHosts });
-  const measured = results.filter(item => !item.untested).length;
+  const candidates = results.filter(item => !item.readOnly), sources = results.length - candidates.length;
+  const measured = candidates.filter(item => !item.untested).length;
   elements.resultSummary.textContent = results.length
-    ? (measured ? results.filter((item) => item.ok && !settings.disabledHosts.includes(item.host)).length + " 可用" : "0 已测") + " / 共 " + results.length + " 个"
+    ? (measured ? candidates.filter((item) => item.ok && !settings.disabledHosts.includes(item.host)).length + " 可用" : "0 已测") + " / " + candidates.length + " 候选" + (sources ? " · " + sources + " 来源" : "")
     : "0 个";
   const signature = JSON.stringify([results, state?.selectedHost, state?.passthroughReason, state?.actualHost, state?.phase, settings.mode, settings.manualHost,
     settings.disabledHosts, settingBusy, settings.enabled, supported]);
@@ -68,13 +69,13 @@ function renderResults() {
     if (selected || excluded || current || item.untested) {
       const tag = document.createElement("small");
       tag.textContent = excluded ? "已排除" : current ? "当前" : selected
-        ? settings.mode === "manual" ? "已固定" : "已选" : item.observed ? "已发现" : item.preset ? "预置" : "未测";
+        ? settings.mode === "manual" ? "已固定" : "已选" : item.readOnly ? "仅观察" : item.observed ? "已发现" : item.preset ? "预置" : "未测";
       name.append(tag);
     }
     const metrics = document.createElement("div");
     metrics.className = "metrics";
     const previous = ["testing", "verifying"].includes(state?.phase) && Number(item.sampledAt) > 0;
-    metrics.textContent = item.untested
+    metrics.textContent = item.readOnly ? "不参与测速或固定" : item.untested
       ? state?.passthroughReason === "baseline-akamai" ? "未参与测速" : "未测速"
       : item.ok
       ? (previous ? "上次 · " : "") + speedLabel(item.kbps) + " · " + Math.round(Number(item.ttfbMs) || 0) + " ms"
@@ -103,7 +104,7 @@ function renderResults() {
     exclude.setAttribute("aria-label", (excluded ? "恢复 " : "排除 ") + hostLabel(item.host));
     exclude.disabled = settingBusy || !supported;
     exclude.addEventListener("click", () => toggleHost(item.host));
-    actions.append(exclude);
+    if (!item.readOnly) actions.append(exclude);
     row.append(info, actions);
     elements.results.append(row);
   }

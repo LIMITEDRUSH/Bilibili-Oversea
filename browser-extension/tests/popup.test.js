@@ -22,6 +22,13 @@ test("扩展弹窗提供确定的根宽度，不用 vw 或百分比上限参与�
   assert.doesNotMatch(css, /max-width:\s*(?:100vw|100%)/);
 });
 
+test("页脚固定在六百像素框架内，只有候选区域滚动，不用网格隐式行挤压", () => {
+  assert.match(css, /\.shell\s*\{[^}]*height: 600px;[^}]*flex-direction: column;[^}]*overflow: hidden/);
+  assert.match(css, /\.results-section\s*\{[^}]*flex: 1;[^}]*min-height: 0/);
+  assert.match(css, /\.results\s*\{[^}]*display: block;[^}]*min-height: 0;[^}]*overflow-y: auto/);
+  assert.doesNotMatch(css, /\.results\s*\{[^}]*display: grid/);
+});
+
 test("撤销失败时即使总开关已关闭也不显示成功暂停或原始直通", () => {
   const view = popupView({ enabled: false, mode: "original" }, { phase: "error", ruleInstalled: true, lastError: "无法撤销线路规则" });
   assert.equal(view.phase, "error");
@@ -107,8 +114,11 @@ test("重测和没有结果时保留真实候选，发现但未测的节点也�
 
 test("Akamai 清空测量结果后仍保留预置目录，但不伪造可用速度", () => {
   const rows = popupRows({ disabledHosts: [] }, { phase: "original", passthroughReason: "baseline-akamai", lastDetectedAt: 1, originalHost: "upos-hz-mirrorakam.akamaized.net", results: [] });
-  assert.equal(rows.length, 3);
-  assert.ok(rows.every(item => item.preset && item.untested && !item.ok));
+  assert.equal(rows.filter(row => !row.readOnly).length, 3);
+  assert.equal(rows.filter(row => row.readOnly).length, 1);
+  assert.equal(rows.find(row => row.readOnly).host, "upos-hz-mirrorakam.akamaized.net");
+  assert.ok(rows.filter(item => !item.readOnly).every(item => item.preset && item.untested && !item.ok));
+  assert.ok(rows.every(item => item.untested && !item.ok));
 });
 
 test("运行代码从不自动打开弹窗或注入播放页面板", () => {

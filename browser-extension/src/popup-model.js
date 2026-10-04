@@ -1,4 +1,4 @@
-import { DEFAULT_CANDIDATES, isBiliMediaHost, uniqueHosts } from "./engine.js";
+import { BILI_AKAMAI_HOST, DEFAULT_CANDIDATES, isBiliMediaHost, uniqueHosts } from "./engine.js";
 
 const hostNames = [
   ["mirrorali", "阿里云"], ["mirrorcos", "腾讯云"], ["mirrorhw", "华为云"],
@@ -28,6 +28,9 @@ export function popupRows(settings, state, { candidateHosts = [] } = {}) {
       if (!rows.has(host)) rows.set(host, { host, ok: false, untested: true, kbps: 0,
         observed: observed.includes(host), preset: DEFAULT_CANDIDATES.includes(host) });
     }
+  }
+  if ([state?.originalHost, state?.actualHost, ...candidateHosts].includes(BILI_AKAMAI_HOST)) {
+    rows.set(BILI_AKAMAI_HOST, { host: BILI_AKAMAI_HOST, ok: false, untested: true, readOnly: true, observed: true, kbps: 0 });
   }
   for (const host of settings.disabledHosts || []) {
     if (!rows.has(host)) rows.set(host, { host, ok: false, untested: true, kbps: 0 });

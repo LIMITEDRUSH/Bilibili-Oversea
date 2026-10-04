@@ -131,7 +131,7 @@ async (page) => {
     if (passthrough === 'baseline-akamai') {
       check('Akamai native passthrough is explicit',await evaluate(`document.querySelector('#routeMode').textContent==='原始直通' && document.querySelector('#message').hidden && document.querySelector('#applyState').textContent==='直通'`));
       check('Akamai does not offer an ineffective retest',await evaluate(`document.querySelector('#retest').disabled`));
-      check('Akamai empty state does not promise automatic benchmarking',await evaluate(`document.querySelector('#results').textContent.includes('未参与测速') && document.querySelectorAll('#results .result').length===3 && document.querySelector('#routeMode').textContent==='原始直通'`));
+      check('Akamai directory shows presets and read-only source',await evaluate(`document.querySelector('#results').textContent.includes('不参与测速或固定') && document.querySelectorAll('#results .result').length>=4 && document.querySelector('#routeMode').textContent==='原始直通'`));
       const nativeRules=await worker.evaluate(()=>chrome.declarativeNetRequest.getSessionRules());
       check('Akamai automatic mode installs no playback redirect',!nativeRules.some(rule=>rule.action.type==='redirect'));
     } else {
@@ -178,7 +178,7 @@ async (page) => {
     // UI-only boundary fixture; no media request, measurement or rule is faked.
     await worker.evaluate(async tabId=>chrome.runtime.sendMessage({type:'state-updated',tabId,settings:{enabled:true,mode:'auto',manualHost:'',disabledHosts:[]},state:{phase:'original',passthroughReason:'baseline-akamai',actualHost:'upos-hz-mirrorakam.akamaized.net',originalHost:'upos-hz-mirrorakam.akamaized.net',sourceKind:'video',ruleInstalled:false,lastDetectedAt:Date.now(),results:[]}}).catch(()=>{}),currentTabId);
     await wait(`document.querySelector('#routeMode').textContent==='原始直通'`);
-    check('Controlled Akamai UI fixture has truthful empty state',await evaluate(`document.querySelector('#results').textContent.includes('未参与测速') && document.querySelectorAll('#results .result').length===3 && document.querySelector('#routeMode').textContent==='原始直通'`));
+    check('Controlled Akamai UI fixture shows source without fake throughput',await evaluate(`document.querySelector('#results').textContent.includes('不参与测速或固定') && document.querySelectorAll('#results .result').length>=4 && document.querySelector('#routeMode').textContent==='原始直通'`));
     check('Controlled Akamai UI fixture disables ineffective retest',await evaluate(`document.querySelector('#retest').disabled && document.querySelector('#applyState').textContent==='直通'`));
     await open();
     await layout('Real state restored after fixture');

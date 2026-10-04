@@ -17,6 +17,7 @@
   const discoveredUrls = new Set();
   const observedResourceUrls = new Set();
   const observedResponseUrls = new Set();
+  const observedRequestUrls = new Set();
   const seenResourceEntries = new Set();
   const bufferHistory = [];
   const trackKinds = new Map();
@@ -34,18 +35,34 @@
   let healthTimer = 0;
   let recoveryTimer = 0;
   let recoveryVideo = null;
-  let lastUrl = location.href;
+  let lastUrl = playbackPageKey(location.href);
+  const watchedVideos = new WeakSet();
+  const discoveredCandidateHosts = new Set();
+
+  function playbackPageKey(value) {
+    try {
+      const url = new URL(value);
+      // Only video identity/part matters; tracking, time links and hash do not.
+      const identity = url.pathname.replace(/\/$/, "");
+      const part = Math.max(1, Number.parseInt(url.searchParams.get("p"), 10) || 1);
+      return `${url.origin}${identity}?p=${part}&ep_id=${url.searchParams.get("ep_id") || ""}`;
+    } catch { return String(value); }
+  }
 
   // Read-only popup telemetry. No timer, network request, or routing message.
   const displayVideos = new WeakMap();
-  let displayPage = location.href;
+  let displayPage = playbackPageKey(location.href);
   let displayPreviousVideo = null;
   let displayPreviousSource = "";
   let displayNavigationPending = false;
 
   function displayVideo() {
-    const videos = [...(document.querySelectorAll?.("video") || [])];
-    return videos.sort((a, b) => {
+    const videos = document.querySelectorAll ? [...document.querySelectorAll("video")]
+      : [document.querySelector("video")].filter(Boolean);
+    const primary = videos.filter(video => video.closest?.("#bilibili-player, #bilibiliPlayer, .bpx-player-container, .bilibili-player, .bilibili-player-video"));
+    const pool = primary.length ? primary : videos;
+    if (pool.length < 2) return pool[0] || null;
+    return pool.sort((a, b) => {
       const score = video => {
         const rect = video.getBoundingClientRect?.() || {};
         const main = video.closest?.("#bilibili-player, #bilibiliPlayer, .bpx-player-container, .bilibili-player, .bilibili-player-video, .player-container");
@@ -58,8 +75,9 @@
   function readPlaybackInfo() {
     const video = displayVideo();
     const source = String(video?.currentSrc || video?.src || "");
-    if (displayPage !== location.href) {
-      displayPage = location.href;
+    const pageKey = playbackPageKey(location.href);
+    if (displayPage !== pageKey) {
+      displayPage = pageKey;
       displayNavigationPending = Boolean(video && video === displayPreviousVideo && source === displayPreviousSource
         && displayVideos.get(video)?.page !== displayPage);
       const old = video && displayVideos.get(video);
@@ -68,26 +86,34 @@
     const heading = document.querySelector("h1.video-title, .video-info-title, h1.media-title, .mediainfo_mediaTitle__yejlB");
     const title = String(heading?.getAttribute?.("title") || heading?.textContent || document.title || "")
       .replace(/[_\s-]*(?:哔哩哔哩|bilibili)(?:_.*)?$/i, "").trim().slice(0, 240);
-    const candidateHosts = [...new Set([...discoveredUrls, ...observedResourceUrls, ...observedResponseUrls]
-      .filter(isMediaUrl).map(url => new URL(url).hostname))].slice(0, 12);
+    const candidateHosts = [...new Set([...discoveredCandidateHosts, ...[...discoveredUrls, ...observedRequestUrls, ...observedResourceUrls, ...observedResponseUrls]
+      .filter(isMediaUrl).map(url => new URL(url).hostname)])].slice(0, 12);
     const result = { sampledAt: Date.now(), hasVideo: Boolean(video), title, status: "empty", candidateHosts };
     if (!video) { displayPreviousVideo = null; displayPreviousSource = ""; return result; }
     let display = displayVideos.get(video);
     if (!display) {
-      display = { status: "loading", lastTime: Number(video.currentTime) || 0, page: displayPage };
+      display = { status: "loading", lastTime: Number(video.currentTime) || 0, lastAdvanceAt: Date.now(), page: displayPage };
       displayVideos.set(video, display);
       for (const name of ["playing", "waiting", "stalled", "pause", "ended", "seeking", "error", "loadstart", "emptied", "loadedmetadata", "timeupdate"]) {
         video.addEventListener(name, () => {
           // Ignore detached display sessions after a navigation.
-          if (displayVideos.get(video) !== display) return;
+          if (displayVideos.get(video) !== display || displayVideo() !== video) return;
           if (name === "loadedmetadata" || name === "loadstart" || name === "emptied") {
             displayNavigationPending = false;
-            display.page = location.href;
+            display.page = playbackPageKey(location.href);
             display.status = "loading";
-          } else if (name === "playing") display.status = "playing";
+          } else if (name === "playing") {
+            displayNavigationPending = false;
+            display.page = playbackPageKey(location.href);
+            display.status = "playing";
+            display.lastAdvanceAt = Date.now();
+          }
           else if (name === "waiting" || name === "stalled") display.status = "buffering";
           else if (name === "timeupdate") {
-            if (Number(video.currentTime) > display.lastTime && !video.paused && !video.seeking) display.status = "playing";
+            if (Number(video.currentTime) > display.lastTime && !video.paused && !video.seeking) {
+              display.status = "playing";
+              display.lastAdvanceAt = Date.now();
+            }
           } else display.status = name === "pause" ? "paused" : name;
         });
       }
@@ -96,9 +122,10 @@
     if (displayNavigationPending) return { ...result, hasVideo: false, status: "loading", title: "正在加载视频" };
     const currentTime = Number(video.currentTime);
     const moving = Number.isFinite(currentTime) && currentTime > display.lastTime && currentTime - display.lastTime < 5;
+    if (moving) display.lastAdvanceAt = Date.now();
     const status = video.error ? "error" : video.ended ? "ended" : video.seeking ? "seeking"
       : video.paused ? "paused" : Number(video.readyState) < 3 ? "buffering"
-      : moving ? "playing" : display.status;
+      : moving ? "playing" : display.status === "playing" && Date.now() - display.lastAdvanceAt > 2500 ? "stalled" : display.status;
     display.lastTime = currentTime;
     display.status = status;
     displayPreviousVideo = video;
@@ -169,7 +196,8 @@
   }
 
   function reportUrls(values, source, observed = false) {
-    const known = source === "page-response" ? observedResponseUrls : observed ? observedResourceUrls : discoveredUrls;
+    const requested = source === "page-request";
+    const known = requested ? observedRequestUrls : source === "page-response" ? observedResponseUrls : observed ? observedResourceUrls : discoveredUrls;
     const urls = sanitizeUrls(values).filter((value) => !known.has(value));
     if (!urls.length) return;
     for (const value of urls) known.add(value);
@@ -178,8 +206,9 @@
       urls,
       source,
       observed,
+      requested,
       tracks: urls.map(url => ({ url, kind: trackKinds.get(new URL(url).pathname) || "unknown" })),
-      originals: source === "page-response" ? urls.map(url => mediaOriginals.get(url)).filter(Boolean) : [],
+      originals: source === "page-response" || requested ? urls.map(url => mediaOriginals.get(url)).filter(Boolean) : [],
       pageUrl: location.href,
       connection: connectionHint(),
     });
@@ -354,33 +383,46 @@
     lastSeekAt = 0;
     lastStallAt = 0;
     bufferHistory.length = 0;
-    video.addEventListener("waiting", () => scheduleStallCheck(video, "waiting"));
-    video.addEventListener("play", periodicDiscovery);
-    video.addEventListener("stalled", () => scheduleStallCheck(video, "stalled"));
-    video.addEventListener("playing", clearRecoveryWatchdog);
-    video.addEventListener("seeking", () => {
-      lastSeekAt = Date.now();
-      bufferHistory.length = 0;
-      window.clearTimeout(stallTimer);
-    });
+    if (!watchedVideos.has(video)) {
+      watchedVideos.add(video);
+      video.addEventListener("waiting", () => scheduleStallCheck(video, "waiting"));
+      video.addEventListener("play", () => { if (video === activeVideo) periodicDiscovery(); });
+      video.addEventListener("stalled", () => scheduleStallCheck(video, "stalled"));
+      video.addEventListener("playing", () => { if (video === activeVideo) clearRecoveryWatchdog(); });
+      video.addEventListener("seeking", () => {
+        if (video !== activeVideo) return;
+        lastSeekAt = Date.now();
+        bufferHistory.length = 0;
+        window.clearTimeout(stallTimer);
+      });
+    }
     if (!healthTimer) healthTimer = window.setInterval(sampleHealth, HEALTH_SAMPLE_INTERVAL_MS);
   }
 
   function locateVideo() {
-    const video = document.querySelector("video");
+    const video = displayVideo();
     if (video) watchVideo(video);
+    else if (activeVideo) {
+      activeVideo = null;
+      bufferHistory.length = 0;
+      window.clearTimeout(stallTimer);
+      clearRecoveryWatchdog();
+    }
   }
 
   function reportNavigation(url = location.href) {
-    if (url === lastUrl) return;
-    lastUrl = url;
+    const pageKey = playbackPageKey(url);
+    if (pageKey === lastUrl) return;
+    lastUrl = pageKey;
     cancelProbes();
     clearRecoveryWatchdog();
     discoveredUrls.clear();
+    discoveredCandidateHosts.clear();
     trackKinds.clear();
     mediaOriginals.clear();
     observedResourceUrls.clear();
     observedResponseUrls.clear();
+    observedRequestUrls.clear();
     seenResourceEntries.clear();
     navigationResourceTime = performance.now();
     bufferHistory.length = 0;
@@ -425,15 +467,24 @@
 
   window.addEventListener("message", (event) => {
     if (event.source !== window || event.origin !== location.origin || event.data?.source !== SOURCE) return;
+    if (event.data.pageUrl && playbackPageKey(event.data.pageUrl) !== playbackPageKey(location.href)) return;
     if (event.data?.type === "media-urls") {
       for (const track of (Array.isArray(event.data.tracks) ? event.data.tracks : []).slice(0, 128)) {
         if (isMediaUrl(track?.url) && ["video", "audio"].includes(track.kind)) {
+          if (discoveredCandidateHosts.size < 12) discoveredCandidateHosts.add(new URL(track.url).hostname);
           trackKinds.set(new URL(track.url).pathname, track.kind);
           if (trackKinds.size > 512) trackKinds.delete(trackKinds.keys().next().value);
         }
       }
       reportUrls(event.data.urls, `page-${event.data.reason || "playurl"}`, false);
-    } else if (event.data?.type === "media-observed") {
+    } else if (event.data?.type === "media-observed" || event.data?.type === "media-requested") {
+      const requested = event.data.type === "media-requested";
+      for (const track of (Array.isArray(event.data.tracks) ? event.data.tracks : []).slice(0, 8)) {
+        if (isMediaUrl(track?.url) && ["video", "audio"].includes(track.kind)) {
+          trackKinds.set(new URL(track.url).pathname, track.kind);
+          if (trackKinds.size > 512) trackKinds.delete(trackKinds.keys().next().value);
+        }
+      }
       for (const item of (Array.isArray(event.data.originals) ? event.data.originals : []).slice(0, 8)) {
         if (isMediaUrl(item?.url) && isMediaUrl(item.originalUrl)
           && new URL(item.url).pathname === new URL(item.originalUrl).pathname) {
@@ -441,10 +492,10 @@
             startByte: Number.isSafeInteger(item.startByte) && item.startByte >= 0 && item.startByte <= 2 ** 40 ? item.startByte : 0 });
           if (mediaOriginals.size > 512) mediaOriginals.delete(mediaOriginals.keys().next().value);
           // Repeat transfers of one signed URL have different Range offsets.
-          observedResponseUrls.delete(item.url);
+          (requested ? observedRequestUrls : observedResponseUrls).delete(item.url);
         }
       }
-      reportUrls(event.data.urls, "page-response", true);
+      reportUrls(event.data.urls, requested ? "page-request" : "page-response", !requested);
     } else if (event.data?.type === "page-changed") {
       reportNavigation(String(event.data.url || location.href));
     }
@@ -463,9 +514,12 @@
     if (message?.type === "rescan") {
       // MV3 workers can sleep while the page stays open. Replay known media
       // without downloading or reclassifying resources from older videos.
-      for (const [known, observed] of [[discoveredUrls, false], [observedResourceUrls, true], [observedResponseUrls, true]]) {
+      for (const [known, observed] of [[discoveredUrls, false], [observedRequestUrls, false], [observedResourceUrls, true], [observedResponseUrls, true]]) {
         const urls = sanitizeUrls([...known].reverse());
-        if (urls.length) send({ type: "media-discovered", urls, observed, tracks: urls.map(url => ({ url, kind: trackKinds.get(new URL(url).pathname) || "unknown" })), originals: known === observedResponseUrls ? urls.map(url => mediaOriginals.get(url)).filter(Boolean) : [], source: known === observedResponseUrls ? "page-response" : "rescan-cache", pageUrl: location.href, connection: connectionHint() });
+        if (urls.length) send({ type: "media-discovered", urls, observed, requested: known === observedRequestUrls,
+          tracks: urls.map(url => ({ url, kind: trackKinds.get(new URL(url).pathname) || "unknown" })),
+          originals: known === observedResponseUrls || known === observedRequestUrls ? urls.map(url => mediaOriginals.get(url)).filter(Boolean) : [],
+          source: known === observedResponseUrls ? "page-response" : known === observedRequestUrls ? "page-request" : "rescan-cache", pageUrl: location.href, connection: connectionHint() });
       }
       periodicDiscovery();
       return false;

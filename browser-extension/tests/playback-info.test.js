@@ -6,7 +6,10 @@ import { clockLabel, playbackView } from "../src/playback-view.js";
 
 const source = fs.readFileSync(new URL("../src/content.js", import.meta.url), "utf8");
 function setup() {
+  let clock = 10000;
+  class ClockDate extends Date { static now() { return clock; } }
   let receive, heading = "当前视频标题", videos = [];
+  const windowEvents = new Map(), documentEvents = new Map();
   const messages = [], timers = [], videoEvents = new WeakMap();
   let listenerCount = 0;
   const location = { href: "https://www.bilibili.com/video/BV1", origin: "https://www.bilibili.com" };
@@ -20,17 +23,17 @@ function setup() {
     return video;
   };
   const context = vm.createContext({
-    window: { addEventListener() {}, postMessage() {}, setInterval(fn, delay) { timers.push(delay); return 1; }, setTimeout, clearTimeout },
+    window: { addEventListener(name, fn) { windowEvents.set(name, fn); }, postMessage() {}, setInterval(fn, delay) { timers.push(delay); return 1; }, setTimeout, clearTimeout },
     document: { hidden: false, title: "页面标题_哔哩哔哩_bilibili", documentElement: { dataset: {} },
-      addEventListener() {}, querySelectorAll: () => videos,
-      querySelector: () => ({ textContent: heading, getAttribute: () => heading }) },
+      addEventListener(name, fn) { documentEvents.set(name, fn); }, querySelectorAll: () => videos,
+      querySelector: selector => selector === "video" ? videos[0] || null : ({ textContent: heading, getAttribute: () => heading }) },
     chrome: { runtime: { getManifest: () => ({ version: "2.3.3" }), sendMessage: async m => messages.push(m), onMessage: { addListener: fn => receive = fn } } },
     location, navigator: { onLine: true }, MutationObserver: class { observe() {} },
-    performance: { getEntriesByType: () => [] }, AbortController, URL, Map, Set, WeakMap, Date,
+    performance: { now: () => 100, getEntriesByType: () => [] }, AbortController, URL, Map, Set, WeakMap, Date: ClockDate,
   });
   vm.runInContext(source, context);
   const sample = () => { let reply; const keep = receive({ type: "get-playback-info" }, {}, value => reply = value); assert.equal(keep, false); return reply.playback; };
-  return { sample, makeVideo, messages, timers, location, listenerCount: () => listenerCount, setVideos: v => videos = v, setHeading: v => heading = v,
+  return { sample, makeVideo, messages, timers, location, windowRef: context.window, windowEvents, documentEvents, advanceClock: ms => clock += ms, listenerCount: () => listenerCount, setVideos: v => videos = v, setHeading: v => heading = v,
     event: (video, name) => videoEvents.get(video).get(name)() };
 }
 
@@ -88,6 +91,56 @@ test("关闭弹窗后发生的导航也不会在重开时卡在旧状态或累�
     assert.equal(api.sample().status, "playing"); assert.equal(api.sample().title, `视频${i}`);
   }
   assert.equal(api.listenerCount(), 11);
+});
+
+test("追踪参数与 hash 变化不清空同一视频的播放和媒体发现", () => {
+  const api = setup(), video = api.makeVideo(); api.setVideos([video]); api.sample();
+  api.location.href += "?spm_id_from=333.788&vd_source=test#reply";
+  video.currentTime++;
+  assert.equal(api.sample().status, "playing");
+  api.windowEvents.get("popstate")();
+  assert.equal(api.messages.some(message => message.type === "page-changed"), false);
+  api.location.href = "https://www.bilibili.com/video/BV1/?p=2";
+  api.windowEvents.get("popstate")();
+  assert.equal(api.messages.some(message => message.type === "page-changed"), true);
+});
+
+test("复用 MSE 切视频后只发 playing 也能结束加载，不等新的 loadedmetadata", () => {
+  const api = setup(), video = api.makeVideo(); api.setVideos([video]); api.sample();
+  api.location.href = "https://www.bilibili.com/video/BV2";
+  assert.equal(api.sample().hasVideo, false);
+  api.setHeading("新视频"); api.event(video, "playing");
+  assert.equal(api.sample().status, "playing");
+  assert.equal(api.sample().title, "新视频");
+});
+
+test("健康监测与展示都绑定主播放器，不误选前面的预览视频", () => {
+  const api = setup(), preview = api.makeVideo(false), main = api.makeVideo(true);
+  preview.currentTime = 80; main.currentTime = 30; api.setVideos([preview, main]);
+  api.documentEvents.get("DOMContentLoaded")();
+  // Native health listeners include waiting; the untouched preview has none.
+  assert.throws(() => api.event(preview, "waiting"));
+  assert.doesNotThrow(() => api.event(main, "seeking"));
+  assert.equal(api.sample().currentTime, 30);
+});
+
+test("SPA 后迟到的旧请求响应不被归到新视频；同视频追踪参数仍接受", () => {
+  const api = setup(), oldPage = api.location.href;
+  api.location.href = "https://www.bilibili.com/video/BV2";
+  const deliver = pageUrl => api.windowEvents.get("message")({ source: api.windowRef, origin: api.location.origin,
+    data: { source: "bili-cdn-auto-page-v2", type: "media-observed", pageUrl, urls: ["https://origin.bilivideo.com/upgcxcode/hd/v.m4s"] } });
+  deliver(oldPage); assert.equal(api.messages.length, 0);
+  deliver(api.location.href + "?spm_id_from=test");
+  assert.equal(api.messages.some(m => m.type === "media-discovered"), true);
+});
+
+test("没有 waiting 事件但进度停止时，不继续伪报正在播放或触发盲目换线路", () => {
+  const api = setup(), video = api.makeVideo(); api.setVideos([video]); api.sample();
+  video.currentTime++; assert.equal(api.sample().status, "playing");
+  api.advanceClock(2501);
+  assert.equal(api.sample().status, "stalled");
+  assert.equal(api.messages.length, 0);
+  video.currentTime++; assert.equal(api.sample().status, "playing");
 });
 
 test("缺失、过期和非播放页的数据不点亮正在播放", () => {

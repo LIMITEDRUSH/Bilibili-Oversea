@@ -9,6 +9,61 @@ function cachedFixture() {
     results:["upos-sz-mirrorcosov.bilivideo.com","upos-sz-mirroraliov.bilivideo.com"].map((host,i)=>({host,ok:true,status:206,bytes:1048576,elapsedMs:100+i*100,ttfbMs:5,stage:"sustained",sampledAt:now}))} };
 }
 
+test("完整 DASH 描述中的备用主机不因前八条 URL 截断而丢失候选", async () => {
+  const harness = installChrome();
+  try {
+    await import(`../src/worker.js?descriptor-hosts=${Date.now()}`);
+    const sender = { tab: { id: 88 } }, pageUrl = "https://www.bilibili.com/video/BVHD";
+    const actual = "https://upos-sz-mirrorcosov.bilivideo.com/upgcxcode/hd/current.m4s";
+    const backup = "https://late-backup.bilivideo.com/upgcxcode/hd/other-quality.m4s";
+    await send(harness.listener(), { type: "media-discovered", pageUrl, urls: [actual],
+      tracks: [{ url: actual, kind: "video" }, { url: backup, kind: "video" },
+        { url: "https://unrelated.example/upgcxcode/hd/v.m4s", kind: "video" }] }, sender);
+    assert.equal(harness.probeMessages.length, 0);
+    await send(harness.listener(), { type: "media-discovered", pageUrl, urls: [actual],
+      tracks: [{ url: actual, kind: "video" }], observed: true, source: "page-response" }, sender);
+    assert.ok(harness.probeMessages[0].hosts.includes("late-backup.bilivideo.com"));
+    assert.equal(harness.probeMessages[0].sourceUrl, actual);
+    assert.ok(harness.probeMessages[0].hosts.length <= 8);
+    assert.ok(!harness.probeMessages[0].hosts.includes("unrelated.example"));
+  } finally { delete globalThis.chrome; }
+});
+
+test("实际视频请求在下载完成前更新最高画质测速源，但不冒充已确认响应", async () => {
+  const harness = installChrome();
+  try {
+    await import(`../src/worker.js?requested-source=${Date.now()}`);
+    const sender = { tab: { id: 89 } }, pageUrl = "https://www.bilibili.com/video/BVHD";
+    const low = "https://origin.bilivideo.com/upgcxcode/hd/low.m4s";
+    const high = "https://origin.bilivideo.com/upgcxcode/hd/high.m4s";
+    await send(harness.listener(), { type: "media-discovered", pageUrl, urls: [low], tracks: [{ url: low, kind: "video" }, { url: high, kind: "video" }] }, sender);
+    assert.equal(harness.probeMessages.length, 0);
+    await send(harness.listener(), { type: "media-discovered", requested: true, source: "page-request", pageUrl,
+      urls: [high], tracks: [{ url: high, kind: "video" }], originals: [{ url: high, originalUrl: high, startByte: 123000 }] }, sender);
+    assert.equal(harness.probeMessages[0].sourceUrl, high);
+    assert.equal(harness.probeMessages[0].startByte, 123000);
+    const state = (await send(harness.listener(), { type: "get-state", tabId: 89 })).state;
+    assert.equal(state.actualHost, "");
+  } finally { delete globalThis.chrome; }
+});
+
+test("请求阶段识别最高画质 Akamai 就立即直通，不等待超时后的 load", async () => {
+  const harness = installChrome({ storage: cachedFixture() });
+  try {
+    await import(`../src/worker.js?requested-akamai=${Date.now()}`);
+    const sender = { tab: { id: 90 } }, pageUrl = "https://www.bilibili.com/video/BVHD";
+    const low = "https://upos-sz-mirrorcosov.bilivideo.com/upgcxcode/hd/low.m4s";
+    const high = "https://upos-hz-mirrorakam.akamaized.net/upgcxcode/hd/high.m4s";
+    await send(harness.listener(), { type: "media-discovered", pageUrl, urls: [low], tracks: [{ url: low, kind: "video" }, { url: high, kind: "video" }] }, sender);
+    await send(harness.listener(), { type: "media-discovered", requested: true, source: "page-request", pageUrl,
+      urls: [high], tracks: [{ url: high, kind: "video" }], originals: [{ url: high, originalUrl: high, startByte: 0 }] }, sender);
+    const state = (await send(harness.listener(), { type: "get-state", tabId: 90 })).state;
+    assert.equal(state.passthroughReason, "baseline-akamai");
+    assert.equal(state.selectedHost, ""); assert.equal(state.actualHost, "");
+    assert.equal(harness.probeMessages.length, 0);
+  } finally { delete globalThis.chrome; }
+});
+
 test("无缓存时不拿 SSR 的其他画质替代实际最高画质测速",async()=>{
   const harness=installChrome();
   try{

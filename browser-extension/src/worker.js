@@ -435,8 +435,8 @@ async function honorMode(tabId, { forceRetest = false, backgroundBenchmark = fal
 function pageVideoKey(pageUrl, sourceUrl) {
   try {
     const page = new URL(String(pageUrl || ""));
-    page.hash = "";
-    return page.href;
+    const part = Math.max(1, Number.parseInt(page.searchParams.get("p"), 10) || 1);
+    return `${page.origin}${page.pathname.replace(/\/$/, "")}?p=${part}&ep_id=${page.searchParams.get("ep_id") || ""}`;
   } catch {
     try {
       const media = new URL(String(sourceUrl || ""));
@@ -447,7 +447,7 @@ function pageVideoKey(pageUrl, sourceUrl) {
   }
 }
 
-async function rememberMedia(tabId, urls, { source = "page", observed = false, pageUrl = "", tracks = [], originals = [] } = {}) {
+async function rememberMedia(tabId, urls, { source = "page", observed = false, requested = false, pageUrl = "", tracks = [], originals = [] } = {}) {
   const state = stateFor(tabId);
   const validUrls = [...new Set((Array.isArray(urls) ? urls : []).filter(isMediaUrl))];
   if (!validUrls.length) return;
@@ -455,6 +455,14 @@ async function rememberMedia(tabId, urls, { source = "page", observed = false, p
     if (isMediaUrl(track?.url) && ["video", "audio"].includes(track.kind)) {
       state.trackKinds.set(new URL(track.url).pathname, track.kind);
       if (state.trackKinds.size > 512) state.trackKinds.delete(state.trackKinds.keys().next().value);
+      // Retain host-only candidates from the complete video descriptor, without
+      // promoting another advertised quality to the actual benchmark source.
+      const host = new URL(track.url).hostname.toLowerCase();
+      if (track.kind === "video" && isCdnTargetHost(host) && state.observedHosts.size < 12) {
+        if (!state.observedHosts.has(host) && state.results.length
+          && !state.results.some(item => item.host === host)) state.pendingCandidateMaintenance = true;
+        state.observedHosts.add(host);
+      }
     }
   }
   const kind = url => state.trackKinds.get(new URL(url).pathname) || "unknown";
@@ -474,13 +482,13 @@ async function rememberMedia(tabId, urls, { source = "page", observed = false, p
   // Track descriptors come from playurl, never guessed from filename numbers.
   // Recent audio completions cannot replace the actual video benchmark source.
   state.sourceUrls = [...new Set([
-    ...(observed ? videoUrls : []),
+    ...(observed || requested ? videoUrls : []),
     ...retained.filter(url => kind(url) === "video"), ...videoUrls,
     ...valid.filter(url => kind(url) === "unknown"),
     ...retained.filter(url => kind(url) === "unknown"),
     ...valid.filter(url => kind(url) === "audio"),
   ])].slice(0, 8);
-  if (observed && videoUrls.length) {
+  if ((observed || requested) && videoUrls.length) {
     const actualPath = new URL(videoUrls[0]).pathname;
     if (actualPath !== state.observedVideoPath) cancelTesting(tabId);
     state.observedVideoPath = actualPath;
@@ -687,6 +695,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       await rememberMedia(senderTabId, message.urls, {
         source: message.source,
         observed: message.observed === true,
+        requested: message.requested === true && message.source === "page-request",
         pageUrl: message.pageUrl,
         tracks: message.tracks,
         originals: message.originals,

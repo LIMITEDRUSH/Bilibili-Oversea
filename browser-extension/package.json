@@ -1,6 +1,6 @@
 {
   "name": "bilibili-oversea-browser",
-  "version": "2.3.3",
+  "version": "2.3.4",
   "description": "Independent privacy-first Chromium MV3 extension for local Bilibili CDN benchmarking and switching.",
   "private": true,
   "type": "module",
@@ -16,7 +16,7 @@
   ],
   "scripts": {
     "test": "node --test",
-    "check": "node --check src/engine.js && node --check src/page-bridge.js && node --check src/content.js && node --check src/network-probe.js && node --check src/worker.js && node --check src/popup.js && node --check src/popup-model.js && node --check src/playback-view.js && node --check qa/save-popup-screenshot.mjs && node --check qa/real-popup-check.js && node --check qa/live-playback-check.js && node --check qa/probe-routing-check.js && node --check qa/hd-playback-start.js && node --check qa/hd-playback-sample.js && node --check qa/hd-playback-report.js && node --check scripts/zip.mjs && node --check scripts/package-extension.mjs && node --test",
+    "check": "node --check src/engine.js && node --check src/page-bridge.js && node --check src/content.js && node --check src/network-probe.js && node --check src/worker.js && node --check src/popup.js && node --check src/popup-model.js && node --check src/playback-view.js && node --check qa/save-popup-screenshot.mjs && node --check qa/quiet-popup-check.js && node --check qa/real-popup-check.js && node --check qa/live-playback-check.js && node --check qa/probe-routing-check.js && node --check qa/hd-playback-start.js && node --check qa/hd-playback-sample.js && node --check qa/hd-playback-report.js && node --check qa/multi-video-start.js && node --check qa/multi-video-report.js && node --check scripts/zip.mjs && node --check scripts/package-extension.mjs && node --test",
     "package": "node scripts/package-extension.mjs"
   }
 }

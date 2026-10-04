@@ -14,7 +14,7 @@ export function playbackView(info, { supported = true, now = Date.now() } = {}) 
     && now - info.sampledAt < 5000;
   const phases = {
     playing: "正在播放", paused: "已暂停", buffering: "正在缓冲", seeking: "正在跳转",
-    ended: "播放结束", loading: "正在加载", error: "播放出错", empty: "等待视频",
+    ended: "播放结束", loading: "正在加载", stalled: "播放停滞", error: "播放出错", empty: "等待视频",
   };
   const phase = !supported ? "unsupported" : !fresh ? "unknown"
     : Object.hasOwn(phases, info.status) ? info.status : "unknown";

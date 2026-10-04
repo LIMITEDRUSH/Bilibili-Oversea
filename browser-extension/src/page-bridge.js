@@ -5,6 +5,7 @@
   const PLAYURL_PATTERN = /(?:\/playurl|\/play\/url)(?:\?|$)/i;
   const MAX_URLS = 8;
   const mediaRequests = new WeakMap();
+  const knownTracks = new Map();
 
   function mediaUrl(value) {
     try {
@@ -65,9 +66,14 @@
     return [...tracks.values()];
   }
 
-  function announce(payload, reason = "playurl") {
+  function announce(payload, reason = "playurl", pageUrl = location.href) {
     const urls = collectMediaUrls(payload);
-    if (urls.length) window.postMessage({ source: SOURCE, type: "media-urls", reason, urls, tracks: collectMediaTracks(payload) }, location.origin);
+    const tracks = collectMediaTracks(payload);
+    for (const track of tracks) {
+      knownTracks.set(new URL(track.url).pathname, track.kind);
+      if (knownTracks.size > 512) knownTracks.delete(knownTracks.keys().next().value);
+    }
+    if (urls.length) window.postMessage({ source: SOURCE, type: "media-urls", reason, urls, tracks, pageUrl }, location.origin);
   }
 
   function looksLikePlayurl(value) {
@@ -83,20 +89,34 @@
     return Number.isSafeInteger(start) && start >= 0 && start <= 2 ** 40 ? start : 0;
   }
 
-  function observeResponse(value, originalUrl, startByte = 0) {
-    if (mediaUrl(value)) window.postMessage({ source: SOURCE, type: "media-observed", urls: [value],
+  function observeResponse(value, originalUrl, startByte = 0, pageUrl = location.href) {
+    if (mediaUrl(value)) window.postMessage({ source: SOURCE, type: "media-observed", urls: [value], pageUrl,
       originals: [{ url: value, originalUrl: mediaUrl(originalUrl) ? String(originalUrl) : value, startByte }] }, location.origin);
+  }
+
+  function observeRequest(url, startByte = 0) {
+    if (!mediaUrl(url)) return;
+    const path = new URL(String(url)).pathname;
+    // SSR playinfo is usually assigned after our document-start microtask.
+    // Bootstrap at the real request, not ten seconds later or at body completion.
+    if (!knownTracks.has(path)) announce(window.__playinfo__, "request-bootstrap");
+    const kind = knownTracks.get(path);
+    window.postMessage({ source: SOURCE, type: "media-requested", urls: [String(url)], pageUrl: location.href,
+      tracks: kind ? [{ url: String(url), kind }] : [],
+      originals: [{ url: String(url), originalUrl: String(url), startByte }] }, location.origin);
   }
 
   const nativeFetch = window.fetch;
   if (typeof nativeFetch === "function") {
     window.fetch = async function biliCdnAutoFetch(input, init) {
-      const response = await nativeFetch.call(this, input, init);
+      const pageUrl = location.href;
       const requestUrl = typeof input === "string" || input instanceof URL ? input : input?.url;
-      if (looksLikePlayurl(requestUrl)) response.clone().json().then((value) => announce(value, "fetch")).catch(() => {});
+      const headers = typeof Headers === "function" ? new Headers(init?.headers || input?.headers) : null;
+      observeRequest(requestUrl, rangeStart(headers?.get("range")));
+      const response = await nativeFetch.call(this, input, init);
+      if (looksLikePlayurl(requestUrl)) response.clone().json().then((value) => announce(value, "fetch", pageUrl)).catch(() => {});
       if (mediaUrl(requestUrl)) {
-        const headers = typeof Headers === "function" ? new Headers(init?.headers || input?.headers) : null;
-        observeResponse(response.url, requestUrl, rangeStart(headers?.get("range")));
+        observeResponse(response.url, requestUrl, rangeStart(headers?.get("range")), pageUrl);
       }
       return response;
     };
@@ -104,17 +124,18 @@
 
   const nativeOpen = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function biliCdnAutoOpen(method, url, ...rest) {
+    const pageUrl = location.href;
     if (looksLikePlayurl(url)) {
       this.addEventListener("load", () => {
         try {
-          announce(this.responseType === "json" ? this.response : JSON.parse(this.responseText), "xhr");
+          announce(this.responseType === "json" ? this.response : JSON.parse(this.responseText), "xhr", pageUrl);
         } catch {}
       }, { once: true });
     } else if (mediaUrl(url)) {
-      mediaRequests.set(this, { originalUrl: String(url), startByte: 0 });
+      mediaRequests.set(this, { originalUrl: String(url), startByte: 0, pageUrl });
       this.addEventListener("load", () => {
         const request = mediaRequests.get(this);
-        observeResponse(this.responseURL, request?.originalUrl, request?.startByte || 0);
+        observeResponse(this.responseURL, request?.originalUrl, request?.startByte || 0, request?.pageUrl);
       }, { once: true });
     }
     return nativeOpen.call(this, method, url, ...rest);
@@ -125,6 +146,15 @@
     XMLHttpRequest.prototype.setRequestHeader = function biliCdnAutoHeader(name, value) {
       if (String(name).toLowerCase() === "range" && mediaRequests.has(this)) mediaRequests.get(this).startByte = rangeStart(value);
       return nativeSetRequestHeader.call(this, name, value);
+    };
+  }
+
+  const nativeSend = XMLHttpRequest.prototype.send;
+  if (typeof nativeSend === "function") {
+    XMLHttpRequest.prototype.send = function biliCdnAutoSend(...args) {
+      const request = mediaRequests.get(this);
+      if (request) observeRequest(request.originalUrl, request.startByte);
+      return nativeSend.apply(this, args);
     };
   }
 
@@ -145,4 +175,5 @@
   }
 
   queueMicrotask(() => announce(window.__playinfo__, "initial"));
+  document.addEventListener("DOMContentLoaded", () => announce(window.__playinfo__, "dom-ready"), { once: true });
 })();
