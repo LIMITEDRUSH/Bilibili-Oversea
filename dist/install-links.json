@@ -1,14 +1,25 @@
 {
   "baseUrl": "https://raw.githubusercontent.com/LIMITEDRUSH/Bilibili-Oversea/main",
-  "generatedAt": "2026-10-04T04:44:32.125Z",
+  "generatedAt": "2026-10-07T19:07:24.295Z",
+  "browserRelease": {
+    "version": "2.5.1",
+    "fileName": "bilibili-oversea-browser-v2.5.1-final.zip",
+    "downloadBaseUrl": "https://limitedrush.online/assets/projects/bilibili-oversea/browser-2.5.1",
+    "projectUrl": "https://limitedrush.online/projects/bilibili-oversea",
+    "sha256": "411f5f36c1f0e8173f464f169c54fa9fd89f7745d110919e29c18a3d88a0d5ad",
+    "bytes": 95651,
+    "runtimeBasis": "r19",
+    "fullAcceptancePassed": false
+  },
   "links": {
     "surge": "surge:///install-module?url=https%3A%2F%2Fraw.githubusercontent.com%2FLIMITEDRUSH%2FBilibili-Oversea%2Fmain%2Fdist%2FBiliCDNAuto.surge.sgmodule",
     "shadowrocket": "shadowrocket://install?module=https%3A%2F%2Fraw.githubusercontent.com%2FLIMITEDRUSH%2FBilibili-Oversea%2Fmain%2Fdist%2FBiliCDNAuto.shadowrocket.module",
     "loon": "https://www.nsloon.com/openloon/import?plugin=https%3A%2F%2Fraw.githubusercontent.com%2FLIMITEDRUSH%2FBilibili-Oversea%2Fmain%2Fdist%2FBiliCDNAuto.loon.plugin",
     "stash": "stash://install-override?url=https%3A%2F%2Fraw.githubusercontent.com%2FLIMITEDRUSH%2FBilibili-Oversea%2Fmain%2Fdist%2FBiliCDNAuto.stash.stoverride",
     "quantumultx": "https://raw.githubusercontent.com/LIMITEDRUSH/Bilibili-Oversea/main/dist/BiliCDNAuto.quantumultx.snippet",
-    "browser": "https://raw.githubusercontent.com/LIMITEDRUSH/Bilibili-Oversea/main/browser-extension/dist/bilibili-oversea-browser-v2.3.1.zip",
-    "browser_sha256": "https://raw.githubusercontent.com/LIMITEDRUSH/Bilibili-Oversea/main/browser-extension/dist/bilibili-oversea-browser-v2.3.1.zip.sha256",
+    "browser": "https://limitedrush.online/assets/projects/bilibili-oversea/browser-2.5.1/bilibili-oversea-browser-v2.5.1-final.zip",
+    "browser_sha256": "https://limitedrush.online/assets/projects/bilibili-oversea/browser-2.5.1/bilibili-oversea-browser-v2.5.1-final.zip.sha256",
+    "project": "https://limitedrush.online/projects/bilibili-oversea",
     "shortcut": "./BiliCDNAuto-ConnectVPN.shortcut"
   }
 }

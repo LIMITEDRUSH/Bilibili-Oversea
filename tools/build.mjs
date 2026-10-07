@@ -11,9 +11,18 @@ const args = Object.fromEntries(
 );
 const baseUrl = String(args["base-url"] || "").replace(/\/+$/, "");
 const outDir = path.resolve(root, args.out || "dist");
-const browserManifest = JSON.parse(
-  await fs.readFile(path.join(root, "browser-extension", "manifest.json"), "utf8"),
+// A published download is a frozen artifact, not a development manifest name.
+const browserRelease = JSON.parse(
+  await fs.readFile(path.join(root, "site", "browser-release.json"), "utf8"),
 );
+if (!/^\d+\.\d+\.\d+$/.test(browserRelease.version)
+    || !/^bilibili-oversea-browser-v[\w.-]+\.zip$/.test(browserRelease.fileName)
+    || browserRelease.downloadBaseUrl !== `https://limitedrush.online/assets/projects/bilibili-oversea/browser-${browserRelease.version}`
+    || browserRelease.projectUrl !== "https://limitedrush.online/projects/bilibili-oversea"
+    || !/^[a-f0-9]{64}$/.test(browserRelease.sha256)
+    || !Number.isSafeInteger(browserRelease.bytes) || browserRelease.bytes <= 0) {
+  throw new Error("Invalid frozen browser release metadata");
+}
 
 if (!/^https:\/\/[^\s]+$/i.test(baseUrl)) {
   throw new Error("请使用 --base-url=https://... 指定项目根目录的公开 HTTPS 地址");
@@ -53,8 +62,9 @@ const links = {
   loon: `https://www.nsloon.com/openloon/import?plugin=${encodeURIComponent(configUrls[templates[2]])}`,
   stash: `stash://install-override?url=${encodeURIComponent(configUrls[templates[3]])}`,
   quantumultx: configUrls[templates[4]],
-  browser: `${baseUrl}/browser-extension/dist/bilibili-oversea-browser-v${browserManifest.version}.zip`,
-  browser_sha256: `${baseUrl}/browser-extension/dist/bilibili-oversea-browser-v${browserManifest.version}.zip.sha256`,
+  browser: `${browserRelease.downloadBaseUrl}/${browserRelease.fileName}`,
+  browser_sha256: `${browserRelease.downloadBaseUrl}/${browserRelease.fileName}.sha256`,
+  project: browserRelease.projectUrl,
   shortcut: `./${shortcutNames[0]}`,
 };
 
@@ -65,7 +75,8 @@ const pages = [
 ];
 for (const [templateName, outputName] of pages) {
   let html = await fs.readFile(path.join(root, "site", templateName), "utf8");
-  html = html.replaceAll("__BROWSER_VERSION__", browserManifest.version);
+  html = html.replaceAll("__BROWSER_VERSION__", browserRelease.version)
+    .replaceAll("__BROWSER_FILENAME__", browserRelease.fileName);
   for (const [key, value] of Object.entries(links)) {
     html = html.replaceAll(`__${key.toUpperCase()}__`, value);
   }
@@ -73,7 +84,7 @@ for (const [templateName, outputName] of pages) {
 }
 await fs.writeFile(
   path.join(outDir, "install-links.json"),
-  `${JSON.stringify({ baseUrl, generatedAt: new Date().toISOString(), links }, null, 2)}\n`,
+  `${JSON.stringify({ baseUrl, generatedAt: new Date().toISOString(), browserRelease, links }, null, 2)}\n`,
 );
 
 console.log(

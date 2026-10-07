@@ -1,120 +1,37 @@
-# Bili CDN Auto
+# Bilibili-oversea
 
-**安装入口：<https://limitedrush.online/projects/bilibili-oversea>**
+本地 B 站媒体线路选择工具。浏览器当前下载为 **2.5.1-final（r19）**；iPhone / iPad 使用独立的 **0.5.0** 模块。
 
-**iOS 完整教程：<https://limitedrush.online/projects/bilibili-oversea#ios-guide>**
+[项目与下载](https://limitedrush.online/projects/bilibili-oversea) · [浏览器教程](https://limitedrush.online/projects/bilibili-oversea#browser-guide) · [手机教程](https://limitedrush.online/projects/bilibili-oversea#ios-guide)
 
-**浏览器插件教程：<https://limitedrush.online/projects/bilibili-oversea#browser-guide>**
+## Chrome / Edge：四步安装
 
-浏览器版可直接从安装入口下载；iPhone/iPad 在同一页面选择 Surge、Loon、Shadowrocket 或 Stash
-一键导入，并可安装“连接 VPN”快捷指令。
+1. [下载 2.5.1 ZIP](https://limitedrush.online/assets/projects/bilibili-oversea/browser-2.5.1/bilibili-oversea-browser-v2.5.1-final.zip)，完整解压到固定目录，确认直接包含 `manifest.json`、`src` 和 `assets`。
+2. 停用旧版和其他 B 站 CDN 切换扩展，保留旧目录供回退。
+3. Edge 打开 `edge://extensions`，Chrome 打开 `chrome://extensions`。启用开发者模式，选择“加载解压缩的扩展”，加载上述文件夹。
+4. 刷新 B 站视频页，点击工具栏图标核对版本 **2.5.1** 和播放状态。插件不会自动弹出。
 
-一个本地运行、无遥测的 B 站视频 CDN 自动优选工具：
+已安装 r19-candidate 的运行代码相同，不必重复安装。当前下载以冻结 ZIP 为准，包内包含完整运行源码；仓库开发目录与交付包独立，不要将旧的主分支目录直接作为 2.5.1 安装。
 
-- 浏览器端使用 Chrome/Edge Manifest V3 扩展；
-- iOS 端使用轻量请求脚本，由快捷指令负责启动和控制；
-- 支持 Surge、Loon、Shadowrocket、Stash，并提供 Quantumult X 实验配置。
+## 当前机制
 
-## 最快开始
+可信的同网络缓存优先，没有合格缓存时通常以 **08CT** 为起点；健康线路优先保持，真实失败时有限轮换，安全缓冲后再条件性轻量复核。不是每个视频开播前测试全部节点并选择最快。
 
-### Chrome / Edge
+目录中的“未测速”不等于不可用；选中线路也不等于已收到媒体数据或播放成功。日常保持自动即可，不必频繁重测。
 
-浏览器插件名称为 **Bilibili-oversea**。使用 `browser-extension/dist/bilibili-oversea-browser-v2.3.5.zip`，解压后打开
-`chrome://extensions` 或 `edge://extensions`，开启开发者模式并选择“加载已解压的扩展程序”。
-自动模式首次安装即启用，打开 B 站视频播放几秒即可。完整步骤见
-[`docs/BROWSER_TUTORIAL.md`](docs/BROWSER_TUTORIAL.md)。
+**个别视频仍可能慢开播或卡顿。** 2.5.1 是本轮交付版，完整性能验收仍未通过；[版本与验证范围](https://limitedrush.online/projects/bilibili-oversea#release-notes)保留具体限制，不承诺所有视频不卡。
 
-### iPhone / iPad
+## iPhone / iPad
 
-iOS 客户端必须通过 HTTPS 下载脚本。先将本项目上传到自己的公开 GitHub 仓库，然后运行：
+在[手机教程](https://limitedrush.online/projects/bilibili-oversea#ios-guide)选择已使用的 Surge、Loon、Shadowrocket 或 Stash 导入模块；Quantumult X 为实验配置。只生成并信任自己客户端的证书，不使用他人的 CA、私钥或共享证书。
 
-```bash
-npm run build -- --base-url=https://raw.githubusercontent.com/你的用户名/仓库名/main
-```
+手机端 0.5.0 本轮没有升级，无法读取浏览器播放器的逐帧或缓冲状态，也未完成本轮真机验收。
 
-把生成的 `dist/` 一并提交，再打开 GitHub Pages 地址。页面提供
-Surge、Loon、Shadowrocket、Stash 的一键导入按钮、iOS 自动化助手和本机控制按钮。
+## 帮助与回退
 
-导入后，在所选网络工具里生成自己的 MITM CA，并按照 App 和 iOS 的提示安装、信任。
-不要使用别人提供的共享证书或私钥。
+- [常见问题与复制诊断](https://limitedrush.online/projects/bilibili-oversea#browser-troubleshooting)：遇到问题请记录画质、症状并复制诊断，可用原始线路对比。
+- [更新与回退](https://limitedrush.online/projects/bilibili-oversea#browser-update)：新版本使用独立目录；回退时停用新版、启用保留的旧版并刷新。
+- [权限与隐私](https://limitedrush.online/projects/bilibili-oversea#privacy)：不向开发者上传遥测；正常播放和必要测量仍会访问媒体 CDN。不提供代理或绕过版权、地区、登录限制。
+- [SHA-256 校验文件](https://limitedrush.online/assets/projects/bilibili-oversea/browser-2.5.1/bilibili-oversea-browser-v2.5.1-final.zip.sha256)：ZIP 为 95,651 字节，SHA-256 为 `411f5f36c1f0e8173f464f169c54fa9fd89f7745d110919e29c18a3d88a0d5ad`。
 
-## 使用方式
-
-浏览器扩展与 iOS 端都会：
-
-1. 从当前视频拿到真实、带签名的媒体 URL；
-2. 对少量候选 CDN 发有大小上限的 Range 请求；
-3. 选择可用且速度更好的节点；
-4. 保留原始路径、查询参数和签名，只替换 CDN 主机；
-5. 缓存选择，节点失败或网络变化后重新选择。
-
-浏览器版还会观察前向缓冲趋势，在明显接近卡顿时尝试下一个已经验证的节点。iOS 版受网络扩展脚本接口限制，
-无法直接读取播放器缓冲事件，因此采用不阻塞开播的请求级策略：每个新视频首个请求立即使用三小时内的缓存赢家，
-没有缓存时直接放行原始 CDN；至少 15 秒后的后续媒体请求才会做 128 KiB 轻量复核。失败节点缓存 10 分钟，
-响应错误后在下一条媒体请求立即轮换到已验证备用节点。
-
-## 点原版哔哩哔哩自动启动
-
-安装页提供经过 Apple “任何人可导入”模式签名的 `BiliCDNAuto-ConnectVPN.shortcut`。它只执行
-iOS 原生“连接 VPN”动作，不保存 API 密钥，也不会打开第三方网页。
-
-在 iPhone/iPad 上进行一次设置：
-
-1. 从安装页添加“Bili CDN Auto · 连接 VPN”快捷指令；
-2. 快捷指令 → 自动化 → `+` → App → 选择“哔哩哔哩”及“打开时”；
-3. 选择“立即运行”，添加“运行快捷指令”，选中刚安装的快捷指令。
-
-以后直接点击原版哔哩哔哩 App 即可。自动化会在当前 App 内连接已配置的 VPN；首个视频请求不会等待测速，
-自适应复核只会在安全延迟后的后续请求发生。
-如果设备有多个 VPN，请编辑快捷指令里的“连接 VPN”动作，选择正在使用的网络工具。
-
-iOS 出于安全原因不允许下载内容替用户静默创建“个人自动化”，所以上述自动化必须在设备上确认一次。从下载、导入、
-证书、验证到自动化和排错的全过程见 [`docs/IOS_TUTORIAL.md`](docs/IOS_TUTORIAL.md)，快捷指令技术说明见
-[`ios/SHORTCUTS.md`](ios/SHORTCUTS.md)。
-
-统一的本机控制地址：
-
-- `http://bili-cdn-auto.invalid/retest`
-- `http://bili-cdn-auto.invalid/auto`
-- `http://bili-cdn-auto.invalid/original`
-- `http://bili-cdn-auto.invalid/status`
-
-`.invalid` 是保留域名。请求会在设备本机被配置脚本直接应答，不会发往外部服务器。
-
-## 支持情况
-
-| 平台 | 文件 | 自动测速 | 网络变化重测 | 快捷控制 |
-| --- | --- | --- | --- | --- |
-| Chrome / Edge | 浏览器扩展 ZIP | 是 | 缓存过期/播放状态触发 | 扩展弹窗 |
-| Surge | `.sgmodule` | 延迟自适应 | 是 | 原生脚本动作及本机 URL |
-| Loon | `.plugin` | 延迟自适应 | 是 | 通用脚本及本机 URL |
-| Shadowrocket | `.module` | 延迟自适应 | 事件脚本/请求识别 | 本机 URL |
-| Stash | `.stoverride` | 延迟自适应 | 请求识别 | 本机 URL |
-| Quantumult X | `.snippet` | 延迟自适应（实验性） | 事件脚本/请求识别 | 本机 URL |
-
-## 开发与打包
-
-```bash
-npm test
-npm run check
-npm run package:browser
-npm run package:shortcut # 需要 macOS；使用 Apple Shortcuts 签名
-npm run build -- --base-url=https://raw.githubusercontent.com/USER/REPO/main
-```
-
-浏览器扩展不需要 npm 依赖或编译；源码就是扩展本体。iOS 构建脚本只负责把公开脚本地址写入各客户端模板，
-并生成一个统一安装页面。
-
-## 安全边界
-
-- 无服务器、无账号、无遥测；测速和选择结果保存在本机。
-- 浏览器扩展不申请代理、Cookie、历史记录或 `<all_urls>` 权限。
-- 浏览器完整媒体 URL 只保存在当前会话内存中。
-- iOS MITM 范围限制在 B 站视频 CDN 域名，但启用前仍应理解本机 CA 的作用。
-- 工具不能绕过版权地区限制、登录限制或失效的媒体签名。
-- CDN 和 B 站签名规则会变化，因此无法承诺永远无需维护。
-
-## 开源来源
-
-浏览器扩展 2.0 为本项目独立实现，不包含其他浏览器扩展的源码。iOS 域名族和匹配范围参考了 Apache-2.0
-项目 [`Biliverse/Redirect`](https://github.com/Biliverse/Redirect)。详细归属见 `THIRD_PARTY_NOTICES.md`。
+GitHub Pages 旧入口继续保留，并引导到个人网站；历史版本保留在仓库记录中。
